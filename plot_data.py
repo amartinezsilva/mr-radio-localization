@@ -540,11 +540,11 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
     covariance_odom_data_df = read_pandas_df(path_experiment_data, columns_odom_covariance, 
                                         timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
     
-    # Get the relative transform
-    columns_t_That_s_data = [time_data_setpoint, opt_T_target_source_x_data, opt_T_target_source_y_data, opt_T_target_source_z_data, opt_T_target_source_q0_data, opt_T_target_source_q1_data, opt_T_target_source_q2_data, opt_T_target_source_q3_data]
+    # # Get the relative transform
+    # columns_t_That_s_data = [time_data_setpoint, opt_T_target_source_x_data, opt_T_target_source_y_data, opt_T_target_source_z_data, opt_T_target_source_q0_data, opt_T_target_source_q1_data, opt_T_target_source_q2_data, opt_T_target_source_q3_data]
 
-    t_That_s_data_df = read_pandas_df(path_experiment_data, columns_t_That_s_data, 
-                                      timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
+    # t_That_s_data_df = read_pandas_df(path_experiment_data, columns_t_That_s_data, 
+    #                                   timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
 
     # #Insert the initial solution (identity transform) as the first row.
     # if not t_That_s_data_df.empty:
@@ -566,17 +566,17 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
     # t_That_s_data_df = pd.concat([initial_df, t_That_s_data_df], ignore_index=True)
 
     #Append yaw to the last column of the estimated transform
-    t_That_s_data_df = add_yaw_to_df(t_That_s_data_df,
-                               opt_T_target_source_q0_data,
-                               opt_T_target_source_q1_data,
-                               opt_T_target_source_q2_data,
-                               opt_T_target_source_q3_data)
-    columns_t_That_s_data = columns_t_That_s_data + ["yaw"]
+    # t_That_s_data_df = add_yaw_to_df(t_That_s_data_df,
+    #                            opt_T_target_source_q0_data,
+    #                            opt_T_target_source_q1_data,
+    #                            opt_T_target_source_q2_data,
+    #                            opt_T_target_source_q3_data)
+    # columns_t_That_s_data = columns_t_That_s_data + ["yaw"]
 
-    #Get relative transform covariance
-    columns_covariance = [time_data_setpoint, covariance_x, covariance_y, covariance_z, covariance_yaw]
-    covariance_data_df = read_pandas_df(path_experiment_data, columns_covariance, 
-                                        timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
+    # #Get relative transform covariance
+    # columns_covariance = [time_data_setpoint, covariance_x, covariance_y, covariance_z, covariance_yaw]
+    # covariance_data_df = read_pandas_df(path_experiment_data, columns_covariance, 
+    #                                     timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
 
     # # Insert the initial covariance row (identity covariance, i.e. all ones) so that it aligns with the
     # # identity row you add to the optimized transform dataframe.
@@ -642,9 +642,9 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
         metrics_traj_df_data = read_pandas_df(path_experiment_data, columns_traj_metrics,
                                                 timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
         
-        #plot metrics
-        plot_metrics(path_folder, metrics_df_data, columns_metrics, t0, "Relative transform errors", "transform")
-        plot_metrics(path_folder, metrics_traj_df_data, columns_traj_metrics, t0, "Overall trajectory errors", "trajectory")
+        # #plot metrics
+        # plot_metrics(path_folder, metrics_df_data, columns_metrics, t0, "Relative transform errors", "transform")
+        # plot_metrics(path_folder, metrics_traj_df_data, columns_traj_metrics, t0, "Overall trajectory errors", "trajectory")
     
     #Transform local poses of graph to a global frame of reference using the anchors
     poses_uav_world = compute_poses_local_to_world(time_data_setpoint, poses_uav, anchor_target_df, anchor_target_uav_cols, use_last=True, use_gt = False, gt_anchor = target_odom_origin)
@@ -671,7 +671,7 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
     print(f'RMSE AGV ----> Translation: {rmse_agv_pos} m, Rotation: {np.rad2deg(rmse_agv_yaw)} º')
     print(f'RMSE UAV ----> Translation: {rmse_uav_pos} m, Rotation: {np.rad2deg(rmse_uav_yaw)} º')
 
-    plot_transform(path_folder, t_That_s_data_df, covariance_data_df, columns_t_That_s_data, columns_covariance, t0, source_odom_origin, target_odom_origin)
+    # plot_transform(path_folder, t_That_s_data_df, covariance_data_df, columns_t_That_s_data, columns_covariance, t0, source_odom_origin, target_odom_origin)
 
     if(experiment_type == "dataset"):
         #Plot radar

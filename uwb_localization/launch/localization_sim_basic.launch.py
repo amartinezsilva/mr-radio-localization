@@ -61,7 +61,8 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         )
 
-    nodes_localization = [node1, node2]
+    # nodes_localization = [node1, node2]
+    nodes_localization = [node2]
     nodes_simulation = [node3, node4, node5, node6]
     
     nodes_to_execute = nodes_localization + nodes_simulation

@@ -7,6 +7,7 @@
 #include <random>
 #include <algorithm>
 #include <map>
+#include <string>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -27,6 +28,7 @@
 #include "uwb_localization/msg/pose_with_covariance_stamped_array.hpp" 
 #include "uwb_localization/utils.hpp"
 
+
 using namespace uwb_localization;
 
 namespace posegraph
@@ -45,9 +47,21 @@ namespace posegraph
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     
       };
+
+    struct UWBConstraint {
+        int id_begin;  // ID of the source KF
+        int id_end; // ID of the target KF
+        std::string anchor_id; // ID of the anchor
+        std::string tag_id;    // ID of the tag
+        double distance; // measured distance
+        double sigma; //stdev
+    };
     
     using VectorOfConstraints =
         std::vector<MeasurementConstraint, Eigen::aligned_allocator<MeasurementConstraint>>;
+
+    using VectorOfUWBConstraints =
+        std::vector<UWBConstraint, Eigen::aligned_allocator<UWBConstraint>>;
     
     using MapOfStates =
         std::map<int,
@@ -74,7 +88,11 @@ namespace posegraph
          // Constructor to initialize the pointer.
          Measurements() : radar_scan(new pcl::PointCloud<pcl::PointXYZ>) {}
     };
-    
+
+    struct UWBSample {
+        double stamp_sec{0.0};     // message time (sec)
+        double distance_m{0.0};    // meters
+    };    
     
     struct RadarMeasurements {
         int KF_id;

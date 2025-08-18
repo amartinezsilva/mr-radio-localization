@@ -35,6 +35,7 @@ def generate_launch_description():
         )
 
 
-    nodes_to_execute = [node1, node2, clock_pub]
+    # nodes_to_execute = [node1, node2, clock_pub]
+    nodes_to_execute = [node1, clock_pub]
     
     return LaunchDescription(nodes_to_execute)

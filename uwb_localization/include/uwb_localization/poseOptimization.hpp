@@ -25,6 +25,11 @@
 #include "uwb_localization/CostFunctions.hpp"
 #include "uwb_localization/manifolds.hpp"
 
+#include "eliko_messages/msg/distances_list.hpp"
+#include <unordered_map>
+#include <deque>
+
+
 namespace uwb_localization {
 
 /**
@@ -42,6 +47,9 @@ public:
   using MeasurementConstraint = posegraph::MeasurementConstraint;
   using MapOfStates           = posegraph::MapOfStates;
   using VectorOfConstraints   = posegraph::VectorOfConstraints;
+  using UWBConstraint         = posegraph::UWBConstraint;
+  using UWBSample             = posegraph::UWBSample;
+  using VectorOfUWBConstraints = posegraph::VectorOfUWBConstraints;
   using Measurements          = posegraph::Measurements;
   using RadarMeasurements     = posegraph::RadarMeasurements;
 
@@ -79,6 +87,9 @@ private:
   void UavEgoVelCb(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr msg);
 
   void optimizedTfCb(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+
+  /// UWB callback: processes distances DIRECTLY in callback
+  void uwbCb(const eliko_messages::msg::DistancesList::SharedPtr msg);
 
   /// Timer: runs optimization.
   void globalOptCb();
@@ -169,6 +180,16 @@ private:
                                          const int& max_keyframes,
                                          ceres::LossFunction* loss);
 
+  /// Add UWB inter-robot (encounter) constraints to Ceres problem (single-pair).
+  bool addEncounterUWBConstraints(ceres::Problem& problem,
+                               const VectorOfUWBConstraints& constraints,
+                               MapOfStates& source_map,
+                               MapOfStates& target_map,
+                               const int& source_current_id,
+                               const int& target_current_id,
+                               const int& max_keyframes,
+                               ceres::LossFunction* loss);
+
   /// Build & solve the pose graph with Ceres; updates states & covariances.
   bool runPosegraphOptimization(MapOfStates& agv_map,
                                 MapOfStates& uav_map,
@@ -176,7 +197,7 @@ private:
                                 const VectorOfConstraints& extraceptive_constraints_agv,
                                 const VectorOfConstraints& proprioceptive_constraints_uav,
                                 const VectorOfConstraints& extraceptive_constraints_uav,
-                                const VectorOfConstraints& encounter_constraints_uwb,
+                                const VectorOfUWBConstraints& encounter_constraints_uwb,
                                 const VectorOfConstraints& encounter_constraints_pointcloud);
 
 private:
@@ -191,6 +212,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr uav_egovel_sub_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr optimized_tf_sub_;
+
+  // UWB subscription
+  rclcpp::Subscription<eliko_messages::msg::DistancesList>::SharedPtr uwb_sub_;
 
   //---------------- Publishers / Services / Timers ----------------//
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr anchor_agv_publisher_;
@@ -219,6 +243,7 @@ private:
   int max_keyframes_{10}, min_keyframes_{3};
   int radar_history_size_{5};
 
+
   //---------------- Measurements & State ----------------//
   CloudPtr uav_radar_cloud_{CloudPtr(new Cloud)};
   CloudPtr agv_radar_cloud_{CloudPtr(new Cloud)};
@@ -240,7 +265,9 @@ private:
   MapOfStates uav_map_, agv_map_;
   VectorOfConstraints proprioceptive_constraints_uav_, extraceptive_constraints_uav_;
   VectorOfConstraints proprioceptive_constraints_agv_, extraceptive_constraints_agv_;
-  VectorOfConstraints encounter_constraints_uwb_, encounter_constraints_pointcloud_;
+  VectorOfConstraints encounter_constraints_pointcloud_;
+  // VectorOfConstraints encounter_constraints_uwb_;
+  VectorOfUWBConstraints encounter_constraints_uwb_;
 
   Measurements agv_measurements_, prev_agv_measurements_;
   Measurements uav_measurements_, prev_uav_measurements_;
@@ -257,6 +284,13 @@ private:
   Sophus::SE3d agv_init_pose_, uav_init_pose_;
   Sophus::SE3d uav_radar_odom_pose_, agv_radar_odom_pose_;
 
+  //---------------- UWB Parameters ----------------//
+  // Known mounting offsets in body frames (populated from params)
+  double uwb_sigma_{0.10};      // meters
+  std::unordered_map<std::string, Eigen::Vector3d> anchor_positions_;
+  std::unordered_map<std::string, Eigen::Vector3d> tag_positions_;
+  std::unordered_map<std::string, std::unordered_map<std::string, UWBSample>> uwb_latest_;
+
   Eigen::Matrix<double,6,6> uav_odom_covariance_, agv_odom_covariance_;
 
   // Timing
@@ -265,6 +299,7 @@ private:
   double last_agv_radar_time_sec_{0.0}, last_uav_radar_time_sec_{0.0};
   double last_agv_egovel_time_sec_{0.0}, last_uav_egovel_time_sec_{0.0};
   double last_relative_pose_time_sec_{0.0}, last_relative_pose_used_time_sec_{0.0};
+  double last_uwb_time_sec_{0.0};
 
   bool last_agv_odom_initialized_{false}, last_uav_odom_initialized_{false};
   bool relative_pose_initialized_{false};

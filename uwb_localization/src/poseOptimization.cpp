@@ -51,6 +51,9 @@ PoseOptimizationNode::PoseOptimizationNode() : rclcpp::Node("pose_optimization_n
             odom_topic_uav_, qos, std::bind(&PoseOptimizationNode::uavOdomCb, this, _1));
     }
 
+    uwb_sub_ = this->create_subscription<eliko_messages::msg::DistancesList>(
+    "/eliko/Distances", 10, std::bind(&PoseOptimizationNode::uwbCb, this, _1));
+
     odom_tf_agv_t_ = "agv/odom";
     odom_tf_uav_t_ = "uav/odom";
 
@@ -195,6 +198,25 @@ void PoseOptimizationNode::declareParams() {
         std::vector<double>{-0.385, -0.02, -0.225, 0.0, 2.417, 3.14});
     this->declare_parameter<std::vector<double>>("radar_agv.position",
         std::vector<double>{0.45, 0.05, 0.65, 0.0, 0.0, 0.0});
+
+    // *************** UWB parameters *************************//
+    this->declare_parameter<double>("uwb_sigma", 0.10);
+
+    // Declare the anchors parameters.
+    this->declare_parameter<std::string>("anchors.a1.id", "0x0009D6");
+    this->declare_parameter<std::vector<double>>("anchors.a1.position", std::vector<double>{-0.32, 0.3, 0.875});
+    this->declare_parameter<std::string>("anchors.a2.id", "0x0009E5");
+    this->declare_parameter<std::vector<double>>("anchors.a2.position", std::vector<double>{0.32, -0.3, 0.875});
+    this->declare_parameter<std::string>("anchors.a3.id", "0x0016FA");
+    this->declare_parameter<std::vector<double>>("anchors.a3.position", std::vector<double>{0.32, 0.3, 0.33});
+    this->declare_parameter<std::string>("anchors.a4.id", "0x0016CF");
+    this->declare_parameter<std::vector<double>>("anchors.a4.position", std::vector<double>{-0.32, -0.3, 0.33});
+
+    // Declare the tags parameters.
+    this->declare_parameter<std::string>("tags.t1.id", "0x001155");
+    this->declare_parameter<std::vector<double>>("tags.t1.position", std::vector<double>{-0.24, -0.24, -0.06});
+    this->declare_parameter<std::string>("tags.t2.id", "0x001397");
+    this->declare_parameter<std::vector<double>>("tags.t2.position", std::vector<double>{0.24, 0.24, -0.06});
 }
 
 void PoseOptimizationNode::getParams() {
@@ -252,6 +274,48 @@ void PoseOptimizationNode::getParams() {
     T_agv_radar_ = buildTransformationSE3(radar_agv_pos[3], radar_agv_pos[4],
         Eigen::Vector4d(radar_agv_pos[0], radar_agv_pos[1], radar_agv_pos[2], radar_agv_pos[5]));
 
+    // *************** UWB parameters *************************//
+    this->get_parameter("uwb_sigma", uwb_sigma_);
+
+    // Initialize anchors from parameters.
+    std::string a1_id, a2_id, a3_id, a4_id;
+    std::vector<double> a1_pos, a2_pos, a3_pos, a4_pos;
+    
+    {
+        // Anchor A1
+        this->get_parameter("anchors.a1.id", a1_id);
+        this->get_parameter("anchors.a1.position", a1_pos);
+        anchor_positions_[a1_id] = Eigen::Vector3d(a1_pos[0], a1_pos[1], a1_pos[2]);
+
+        this->get_parameter("anchors.a2.id", a2_id);
+        this->get_parameter("anchors.a2.position", a2_pos);
+        anchor_positions_[a2_id] = Eigen::Vector3d(a2_pos[0], a2_pos[1], a2_pos[2]);
+
+        this->get_parameter("anchors.a3.id", a3_id);
+        this->get_parameter("anchors.a3.position", a3_pos);
+        anchor_positions_[a3_id] = Eigen::Vector3d(a3_pos[0], a3_pos[1], a3_pos[2]);
+
+        this->get_parameter("anchors.a4.id", a4_id);
+        this->get_parameter("anchors.a4.position", a4_pos);
+        anchor_positions_[a4_id] = Eigen::Vector3d(a4_pos[0], a4_pos[1], a4_pos[2]);
+
+    }
+    
+    // Initialize anchors from parameters.
+    std::string t1_id, t2_id;
+    std::vector<double> t1_pos, t2_pos;
+
+    // Initialize tags from parameters.
+    {
+        this->get_parameter("tags.t1.id", t1_id);
+        this->get_parameter("tags.t1.position", t1_pos);
+        tag_positions_[t1_id] = Eigen::Vector3d(t1_pos[0], t1_pos[1], t1_pos[2]);
+
+        this->get_parameter("tags.t2.id", t2_id);
+        this->get_parameter("tags.t2.position", t2_pos);
+        tag_positions_[t2_id] = Eigen::Vector3d(t2_pos[0], t2_pos[1], t2_pos[2]);
+    }
+
     // Logs
     RCLCPP_INFO(this->get_logger(), "PoseOptimizationNode parameters:");
     RCLCPP_INFO(this->get_logger(), "  odom_topic_agv: %s", odom_topic_agv_.c_str());
@@ -285,6 +349,21 @@ void PoseOptimizationNode::getParams() {
     logTransformationMatrix(T_uav_radar_.matrix(), this->get_logger());
     RCLCPP_INFO(this->get_logger(), "T_agv_radar:\n");
     logTransformationMatrix(T_agv_radar_.matrix(), this->get_logger());
+
+    // Log anchors.
+    for (const auto& kv : anchor_positions_) {
+        const auto &id = kv.first;
+        const auto &pos = kv.second;
+        RCLCPP_INFO(this->get_logger(), "  Anchor '%s': [%f, %f, %f]", id.c_str(), pos.x(), pos.y(), pos.z());
+    }
+
+    // Log tags.
+    for (const auto& kv : tag_positions_) {
+        const auto &id = kv.first;
+        const auto &pos = kv.second;
+        RCLCPP_INFO(this->get_logger(), "  Tag '%s': [%f, %f, %f]", id.c_str(), pos.x(), pos.y(), pos.z());
+    }
+
 }
 
 
@@ -356,6 +435,27 @@ void PoseOptimizationNode::uavOdomCb(const nav_msgs::msg::Odometry::SharedPtr ms
     uav_odom_covariance_ = cov;
     last_uav_odom_pose_ = uav_odom_pose_;
     last_uav_odom_time_sec_ = rclcpp::Time(msg->header.stamp).seconds();
+}
+
+
+void PoseOptimizationNode::uwbCb(const eliko_messages::msg::DistancesList::SharedPtr msg){
+
+    if (msg->anchor_distances.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Empty UWB distances received!");
+        return;
+    }
+    
+    last_uwb_time_sec_ = rclcpp::Time(msg->header.stamp).seconds();
+
+    // This message is for ONE tag, multiple anchors
+    for (const auto& d : msg->anchor_distances) {
+        const std::string tag   = d.tag_sn;
+        const std::string anch  = d.anchor_sn;
+        const double dist_m     = static_cast<double>(d.distance) / 100.0; // cm -> m
+        uwb_latest_[tag][anch] = UWBSample{last_uwb_time_sec_, dist_m};
+    }
+
+   
 }
 
 void PoseOptimizationNode::pclAgvRadarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -759,6 +859,50 @@ bool PoseOptimizationNode::addEncounterTrajectoryConstraints(ceres::Problem &pro
         return constraint_available;
     }
 
+
+    // Helper function to add UWB constraints.
+    bool PoseOptimizationNode::addEncounterUWBConstraints(ceres::Problem &problem, 
+                                                        const VectorOfUWBConstraints &constraints,
+                                                        MapOfStates &source_map, MapOfStates &target_map,
+                                                        const int &source_current_id, const int &target_current_id,
+                                                        const int &max_keyframes,
+                                                        ceres::LossFunction *loss){
+
+        bool constraint_available = false;
+
+        for (const auto &constraint : constraints) {
+
+            bool source_fixed = posegraph::isNodeFixedKF(source_current_id, constraint.id_begin, max_keyframes, min_keyframes_);
+            bool target_fixed = posegraph::isNodeFixedKF(target_current_id, constraint.id_end, max_keyframes, min_keyframes_);
+            
+            if (source_fixed && target_fixed) continue;
+
+            State &source = source_map[constraint.id_begin];
+            State &target = target_map[constraint.id_end];
+
+            const auto& anchor_offset = anchor_positions_.at(constraint.anchor_id);
+            const auto& tag_offset = tag_positions_.at(constraint.tag_id);
+
+            ceres::CostFunction* cost = UWBPoseGraphCostFunction::Create(
+                                        anchor_offset, tag_offset, constraint.distance, constraint.sigma,
+                                        source.roll, source.pitch,               // KF fixed r/p
+                                        target.roll, target.pitch,
+                                        anchor_node_agv_.roll, anchor_node_agv_.pitch,     // anchors fixed r/p
+                                        anchor_node_uav_.roll, anchor_node_uav_.pitch);
+
+            problem.AddResidualBlock(cost, loss,
+                anchor_node_agv_.state.data(),
+                anchor_node_uav_.state.data(),
+                source.state.data(),
+                target.state.data());
+            
+            constraint_available = true;
+
+        }
+
+        return constraint_available;
+    }
+
 // ---------------- Pose Graph Optimization -------------------
     //
     // In this function we build a Ceres problem that fuses:
@@ -770,7 +914,7 @@ bool PoseOptimizationNode::addEncounterTrajectoryConstraints(ceres::Problem &pro
 bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfStates &uav_map,
                                 const VectorOfConstraints &proprioceptive_constraints_agv, const VectorOfConstraints &extraceptive_constraints_agv,
                                 const VectorOfConstraints &proprioceptive_constraints_uav, const VectorOfConstraints &extraceptive_constraints_uav,
-                                const VectorOfConstraints &encounter_constraints_uwb, const VectorOfConstraints &encounter_constraints_pointcloud) {
+                                const VectorOfUWBConstraints &encounter_constraints_uwb, const VectorOfConstraints &encounter_constraints_pointcloud) {
 
     ceres::Problem problem;
 
@@ -834,13 +978,14 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
     bool extraceptive_constraints_uav_available = addMeasurementConstraints(problem, extraceptive_constraints_uav, uav_map, uav_id_, max_keyframes_, robust_loss);
 
     // Add encounter constraints.
-    bool encounter_uwb_available = false;
-    //**new version, apply constraint to all nodes in window**//
-    if(uwb_transform_available_) encounter_uwb_available = addEncounterTrajectoryConstraints(problem, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
+    // bool encounter_uwb_available = false;
+    // //**new version, apply constraint to all nodes in window**//
+    // if(uwb_transform_available_) encounter_uwb_available = addEncounterTrajectoryConstraints(problem, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
     //**previous version**//
     // encounter_uwb_available = addEncounterConstraints(problem, encounter_constraints_uwb, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
     
     bool encounter_pointcloud_available = addEncounterConstraints(problem, encounter_constraints_pointcloud, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
+    bool encounter_uwb_available = addEncounterUWBConstraints(problem, encounter_constraints_uwb, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
 
     if(!encounter_uwb_available && !encounter_pointcloud_available){
         // Freeze the anchor nodes when the constraints available do not involve encounters
@@ -862,6 +1007,10 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
     
     // Configure solver options
     ceres::Solver::Options options;
+
+    // options.callbacks.push_back(new ResidualLogger(problem));
+    // options.update_state_every_iteration = true;
+
     options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY; // ceres::SPARSE_NORMAL_CHOLESKY,  ceres::DENSE_QR
     options.num_threads = 4;
     options.use_nonmonotonic_steps = true;  // Help escape plateaus
@@ -1440,36 +1589,67 @@ void PoseOptimizationNode::globalOptCb() {
 
         //////////////// MANAGE ENCOUNTERS ///////////////
 
-        //Check if there is a new relative position available //TODO: second condition would be new value has arrived
-        uwb_transform_available_ = relative_pose_initialized_ && last_relative_pose_time_sec_ > last_relative_pose_used_time_sec_;
-
-        if(uwb_transform_available_){
+        // //Check if there is a new relative position available //TODO: second condition would be new value has arrived
+        // uwb_transform_available_ = relative_pose_initialized_ && last_relative_pose_time_sec_ > last_relative_pose_used_time_sec_;
+        // if(uwb_transform_available_){
             
-            // RCLCPP_INFO(this->get_logger(), "UWB transform available");
-            last_relative_pose_used_time_sec_ = last_relative_pose_time_sec_;
+        //     // RCLCPP_INFO(this->get_logger(), "UWB transform available");
+        //     last_relative_pose_used_time_sec_ = last_relative_pose_time_sec_;
 
-            latest_relative_pose_SE3_ = transformSE3FromPoseMsg(latest_relative_pose_.pose.pose);
-            //Unflatten matrix to extract the covariance
-            for (size_t i = 0; i < 6; ++i) {
-                for (size_t j = 0; j < 6; ++j) {
-                    latest_relative_pose_cov_(i,j) = latest_relative_pose_.pose.covariance[i * 6 + j];
-                }
+        //     latest_relative_pose_SE3_ = transformSE3FromPoseMsg(latest_relative_pose_.pose.pose);
+        //     //Unflatten matrix to extract the covariance
+        //     for (size_t i = 0; i < 6; ++i) {
+        //         for (size_t j = 0; j < 6; ++j) {
+        //             latest_relative_pose_cov_(i,j) = latest_relative_pose_.pose.covariance[i * 6 + j];
+        //         }
+        //     }
+
+        //     double covariance_multiplier = 1.0;
+
+        //     Sophus::SE3d w_That_target = T_agv_anchor_prior_ * latest_relative_pose_SE3_.inverse() * uav_measurements_.odom_pose;
+        //     Sophus::SE3d w_That_source = T_agv_anchor_prior_ * agv_measurements_.odom_pose;
+        //     Sophus::SE3d That_t_s = w_That_target.inverse() * w_That_source;
+            
+        //     MeasurementConstraint uwb_constraint;
+        //     uwb_constraint.id_begin = agv_id_; //relates latest UAV and AGV nodes
+        //     uwb_constraint.id_end = uav_id_;
+        //     uwb_constraint.t_T_s = That_t_s;
+        //     uwb_constraint.covariance = reduceCovarianceMatrix(latest_relative_pose_cov_);
+        //     uwb_constraint.covariance*=covariance_multiplier;
+        //     encounter_constraints_uwb_.push_back(uwb_constraint);
+
+        // }
+
+        for (const auto& tag_entry : uwb_latest_) {
+            const std::string& tag_id = tag_entry.first;
+            const auto& per_anchor    = tag_entry.second;
+
+            for (const auto& anchor_entry : per_anchor) {
+                const std::string& anchor_id = anchor_entry.first;
+                const UWBSample& s = anchor_entry.second;
+
+                // skip stale pairs
+                if ((current_time_sec - s.stamp_sec) > measurement_sync_thr_) continue;
+
+                // Make sure we actually know these IDs (so .at() won’t throw later)
+                if (tag_positions_.find(tag_id) == tag_positions_.end()) continue;
+                if (anchor_positions_.find(anchor_id) == anchor_positions_.end()) continue;
+
+                UWBConstraint c;
+                c.id_begin   = agv_id_;          // current AGV KF (source)
+                c.id_end     = uav_id_;          // current UAV KF (target)
+                c.anchor_id  = anchor_id;        // string ids
+                c.tag_id     = tag_id;
+                c.distance   = s.distance_m;     // meters
+                c.sigma      = uwb_sigma_;       // from params
+
+                encounter_constraints_uwb_.push_back(c);
+
+                RCLCPP_INFO(this->get_logger(), "UWB constraint added: anchor=%s tag=%s dist=%.2f m",
+                anchor_id.c_str(),
+                tag_id.c_str(),
+                s.distance_m);
             }
-
-            double covariance_multiplier = 1.0;
-
-            Sophus::SE3d w_That_target = T_agv_anchor_prior_ * latest_relative_pose_SE3_.inverse() * uav_measurements_.odom_pose;
-            Sophus::SE3d w_That_source = T_agv_anchor_prior_ * agv_measurements_.odom_pose;
-            Sophus::SE3d That_t_s = w_That_target.inverse() * w_That_source;
-            
-            MeasurementConstraint uwb_constraint;
-            uwb_constraint.id_begin = agv_id_; //relates latest UAV and AGV nodes
-            uwb_constraint.id_end = uav_id_;
-            uwb_constraint.t_T_s = That_t_s;
-            uwb_constraint.covariance = reduceCovarianceMatrix(latest_relative_pose_cov_);
-            uwb_constraint.covariance*=covariance_multiplier;
-            encounter_constraints_uwb_.push_back(uwb_constraint);
-
         }
        
         if(!(agv_id_ >= min_keyframes_ || uav_id_ >= min_keyframes_)){

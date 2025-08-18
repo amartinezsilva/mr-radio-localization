@@ -277,7 +277,106 @@ namespace uwb_localization
         const double anchor_roll_uav_, anchor_pitch_uav_;
         const double anchor_roll_agv_, anchor_pitch_agv_;
       };
+    
+    struct UWBPoseGraphCostFunction {
+        UWBPoseGraphCostFunction(const Eigen::Vector3d& agv_anchor_offset_bl,
+                            const Eigen::Vector3d& uav_tag_offset_bl,
+                            double measured_dist, double sigma,
+                            double roll_agv_kf, double pitch_agv_kf,
+                            double roll_uav_kf, double pitch_uav_kf,
+                            double roll_Aagv,   double pitch_Aagv,
+                            double roll_Auav,   double pitch_Auav)
+        : a_off_(agv_anchor_offset_bl),
+            t_off_(uav_tag_offset_bl),
+            d_(measured_dist),
+            inv_sigma_(1.0 / sigma),
+            rpk_agv_(roll_agv_kf), ppk_agv_(pitch_agv_kf),
+            rpk_uav_(roll_uav_kf), ppk_uav_(pitch_uav_kf),
+            rpa_agv_(roll_Aagv),   ppa_agv_(pitch_Aagv),
+            rpa_uav_(roll_Auav),   ppa_uav_(pitch_Auav) {}
+
+        template <typename T>
+        bool operator()(const T* const A_agv,  // [x,y,z,yaw]  AGV-odom -> World (anchor node)
+                        const T* const A_uav,  // [x,y,z,yaw]  UAV-odom -> World (anchor node)
+                        const T* const X_i,    // [x,y,z,yaw]  AGV base_link in AGV-odom (KF i)
+                        const T* const Y_j,    // [x,y,z,yaw]  UAV base_link in UAV-odom (KF j)
+                        T* residual) const {
+
+            // Build the four SE3s (4-DoF yaw+xyz, fixed roll/pitch)
+            const Sophus::SE3<T> Tw_Aagv = buildTransformationSE3_(A_agv, rpa_agv_, ppa_agv_); // World <- AGV-odom
+            const Sophus::SE3<T> Tw_Auav = buildTransformationSE3_(A_uav, rpa_uav_, ppa_uav_); // World <- UAV-odom
+            const Sophus::SE3<T> To_Xi   = buildTransformationSE3_(X_i,   rpk_agv_, ppk_agv_); // AGV-odom <- AGV base_link
+            const Sophus::SE3<T> To_Yj   = buildTransformationSE3_(Y_j,   rpk_uav_, ppk_uav_); // UAV-odom <- UAV base_link
+
+            // Fixed hardware offsets in base_link -> lift to T
+            const Eigen::Matrix<T,3,1> pa_bl(T(a_off_.x()), T(a_off_.y()), T(a_off_.z()));
+            const Eigen::Matrix<T,3,1> pt_bl(T(t_off_.x()), T(t_off_.y()), T(t_off_.z()));
+
+            // Compose: World points of anchor/tag hardware
+            // World <- AGV-odom <- base_link * offset
+            const Eigen::Matrix<T,3,1> pw_anchor = (Tw_Aagv * To_Xi) * pa_bl;
+            // World <- UAV-odom <- base_link * offset
+            const Eigen::Matrix<T,3,1> pw_tag    = (Tw_Auav * To_Yj) * pt_bl;
+
+            // Range residual
+            const Eigen::Matrix<T,3,1> diff = pw_anchor - pw_tag;
+            const T pred = ceres::sqrt(diff.squaredNorm());
+            residual[0] = (pred - T(d_)) * T(inv_sigma_);
+            return true;
+        }
+
+        static ceres::CostFunction* Create(const Eigen::Vector3d& agv_anchor_offset_bl,
+                                            const Eigen::Vector3d& uav_tag_offset_bl,
+                                            double d, double sigma,
+                                            double roll_agv_kf, double pitch_agv_kf,
+                                            double roll_uav_kf, double pitch_uav_kf,
+                                            double roll_Aagv,   double pitch_Aagv,
+                                            double roll_Auav,   double pitch_Auav) {
+            return (new ceres::AutoDiffCostFunction<UWBPoseGraphCostFunction, 1, 4,4,4,4>(
+            new UWBPoseGraphCostFunction(agv_anchor_offset_bl, uav_tag_offset_bl, d, sigma,
+                                    roll_agv_kf, pitch_agv_kf,
+                                    roll_uav_kf, pitch_uav_kf,
+                                    roll_Aagv,   pitch_Aagv,
+                                    roll_Auav,   pitch_Auav)));
+        }
+
+        private:
+
+            template <typename T>
+            Sophus::SE3<T> buildTransformationSE3_(const T* state, double roll, double pitch) const {
+                // Your helper (kept verbatim, just inlined here)
+                Eigen::Matrix<T,3,1> t; t << state[0], state[1], state[2];
+                Eigen::Matrix<T,3,3> R =
+                    (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T,3,1>::UnitZ()) *
+                    Eigen::AngleAxis<T>(T(pitch),  Eigen::Matrix<T,3,1>::UnitY()) *
+                    Eigen::AngleAxis<T>(T(roll),   Eigen::Matrix<T,3,1>::UnitX())).toRotationMatrix();
+                return Sophus::SE3<T>(R, t);
+            }
+
+            // Data
+            Eigen::Vector3d a_off_, t_off_;
+            double d_, inv_sigma_;
+            // Fixed roll/pitch per block
+            double rpk_agv_, ppk_agv_, rpk_uav_, ppk_uav_;
+            double rpa_agv_, ppa_agv_, rpa_uav_, ppa_uav_;
+        };
 
 }
+
+
+struct ResidualLogger : public ceres::IterationCallback {
+  explicit ResidualLogger(ceres::Problem& problem) : problem_(problem) {}
+
+  ceres::CallbackReturnType operator()(const ceres::IterationSummary& summary) override {
+    std::vector<double> residuals;
+    problem_.Evaluate(ceres::Problem::EvaluateOptions(), nullptr, &residuals, nullptr, nullptr);
+    RCLCPP_INFO(rclcpp::get_logger("uwb_opt"), "Residuals: %zu values", residuals.size());
+    for (size_t i = 0; i < residuals.size(); i++) {
+      RCLCPP_INFO(rclcpp::get_logger("uwb_opt"), "  res[%zu] = %.6f", i, residuals[i]);
+    }
+    return ceres::SOLVER_CONTINUE;
+  }
+  ceres::Problem& problem_;
+};
 
 #endif
