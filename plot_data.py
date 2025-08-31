@@ -616,19 +616,21 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
                                         timestamp_col=time_data_setpoint, max_timestamp=max_timestamp)
     
     # Extract origin from the first AGV GT pose
-    first_agv_row = source_gt_data_df.iloc[0]
-    agv_pos = first_agv_row[[source_gt_x_data, source_gt_y_data, source_gt_z_data]].values
-    agv_quat = first_agv_row[[source_gt_q0_data, source_gt_q1_data, source_gt_q2_data, source_gt_q3_data]].values
-    agv_rpy = R.from_quat(agv_quat).as_euler('zyx', degrees=False)  # yaw, pitch, roll
-    source_odom_origin = pose_to_matrix(np.concatenate((agv_pos, agv_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
+    # first_agv_row = source_gt_data_df.iloc[0]
+    # agv_pos = first_agv_row[[source_gt_x_data, source_gt_y_data, source_gt_z_data]].values
+    # agv_quat = first_agv_row[[source_gt_q0_data, source_gt_q1_data, source_gt_q2_data, source_gt_q3_data]].values
+    # agv_rpy = R.from_quat(agv_quat).as_euler('zyx', degrees=False)  # yaw, pitch, roll
+    # source_odom_origin = pose_to_matrix(np.concatenate((agv_pos, agv_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
+    source_odom_origin = pose_to_matrix([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    # Extract origin from the first UAV GT pose
-    first_uav_row = target_gt_data_df.iloc[0]
-    uav_pos = first_uav_row[[target_gt_x_data, target_gt_y_data, target_gt_z_data]].values
-    uav_quat = first_uav_row[[target_gt_q0_data, target_gt_q1_data, target_gt_q2_data, target_gt_q3_data]].values
-    uav_rpy = R.from_quat(uav_quat).as_euler('zyx', degrees=False)
-    target_odom_origin = pose_to_matrix(np.concatenate((uav_pos, uav_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
-    
+    # # Extract origin from the first UAV GT pose
+    # first_uav_row = target_gt_data_df.iloc[0]
+    # uav_pos = first_uav_row[[target_gt_x_data, target_gt_y_data, target_gt_z_data]].values
+    # uav_quat = first_uav_row[[target_gt_q0_data, target_gt_q1_data, target_gt_q2_data, target_gt_q3_data]].values
+    # uav_rpy = R.from_quat(uav_quat).as_euler('zyx', degrees=False)
+    # target_odom_origin = pose_to_matrix(np.concatenate((uav_pos, uav_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
+    target_odom_origin = pose_to_matrix([0.5, -0.5, 0.0, 0.0, 0.0, 0.524])
+
     t0 = target_gt_data_df[columns_target_gt_data[0]].iloc[0]
 
     if experiment_type == "basic_sim":
