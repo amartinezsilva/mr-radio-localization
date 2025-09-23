@@ -70,6 +70,12 @@
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
+
+#include <visualization_msgs/msg/marker_array.hpp>
+
 using namespace std::chrono;
 using namespace std::chrono_literals;
 using namespace px4_msgs::msg;
@@ -103,6 +109,9 @@ public:
 		this->declare_parameter<double>("cruise_speed", 0.5);
 
 		this->declare_parameter<std::vector<double>>("uav_origin", {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+
+		this->declare_parameter<std::vector<double>>("tags.t1.position", {0.0,0.0,0.0});
+    	this->declare_parameter<std::vector<double>>("tags.t2.position", {0.0,0.0,0.0});
 
 		// Retrieve parameter values
 		std::string offboard_control_mode_topic_;
@@ -163,10 +172,34 @@ public:
 		ros_odometry_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(ros_odometry_topic_, 10);
 		ros_gt_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(ros_gt_topic_, 10);
 
+		marker_array_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("uav/gt_marker_array", 10);
+
 		start_time_ = this->get_clock()->now();
+
+		tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+    	static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
 		// Set QoS to match PX4 publisher
 		rclcpp::QoS qos_profile = rclcpp::SensorDataQoS();
+
+		for (const auto& tag : {"t1", "t2"}) {
+			std::vector<double> tag_pos;
+			std::string param_name = "tags." + std::string(tag) + ".position";
+			if (this->get_parameter(param_name, tag_pos) && tag_pos.size() == 3) {
+				geometry_msgs::msg::TransformStamped tf;
+				tf.header.stamp = this->get_clock()->now();
+				tf.header.frame_id = "uav/base_link";
+				tf.child_frame_id = "uav/" + std::string(tag);
+				tf.transform.translation.x = tag_pos[0];
+				tf.transform.translation.y = tag_pos[1];
+				tf.transform.translation.z = tag_pos[2];
+				tf.transform.rotation.x = 0.0;
+				tf.transform.rotation.y = 0.0;
+				tf.transform.rotation.z = 0.0;
+				tf.transform.rotation.w = 1.0;
+				static_tf_broadcaster_->sendTransform(tf);
+			}
+		}
 
 		vehicle_odometry_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleOdometry>(
 			vehicle_odometry_topic_, qos_profile,
@@ -371,8 +404,45 @@ public:
 				pose_msg.pose.orientation.y = q_world_enu.y();
 				pose_msg.pose.orientation.z = q_world_enu.z();
 				pose_msg.pose.orientation.w = q_world_enu.w();
-
 				ros_gt_publisher_->publish(pose_msg);
+
+				geometry_msgs::msg::TransformStamped tf_msg;
+				tf_msg.header.stamp = pose_msg.header.stamp;
+				tf_msg.header.frame_id = "map";
+				tf_msg.child_frame_id = "uav/base_link";
+				tf_msg.transform.translation.x = pos_enu_world.x();
+				tf_msg.transform.translation.y = pos_enu_world.y();
+				tf_msg.transform.translation.z = pos_enu_world.z();
+				tf_msg.transform.rotation = pose_msg.pose.orientation;
+				tf_broadcaster_->sendTransform(tf_msg);
+
+				// Store pose history
+				gt_pose_history_.push_back(pose_msg.pose);
+				if (gt_pose_history_.size() > 500.0) {
+                gt_pose_history_.erase(gt_pose_history_.begin());
+            	}
+				// Publish marker array
+				visualization_msgs::msg::MarkerArray marker_array;
+				for (size_t i = 0; i < gt_pose_history_.size(); ++i) {
+					visualization_msgs::msg::Marker marker;
+					marker.header = pose_msg.header;
+					marker.ns = "uav_gt";
+					marker.id = i;
+					marker.type = visualization_msgs::msg::Marker::SPHERE;
+					marker.action = visualization_msgs::msg::Marker::ADD;
+					marker.pose = gt_pose_history_[i];
+					marker.scale.x = 0.1;
+					marker.scale.y = 0.1;
+					marker.scale.z = 0.1;
+					marker.color.r = 0.0;
+					marker.color.g = 0.0;
+					marker.color.b = 1.0;
+					marker.color.a = 1.0;
+					marker.lifetime = rclcpp::Duration(0,0); // forever
+					marker_array.markers.push_back(marker);
+				}
+				marker_array_pub_->publish(marker_array);
+
 			});
 
 
@@ -408,6 +478,7 @@ public:
 			}
 		};
 		timer_ = this->create_wall_timer(100ms, timer_callback);
+		
 	}
 
 	void arm();
@@ -429,7 +500,8 @@ private:
 	rclcpp::Publisher<VehicleCommand>::SharedPtr vehicle_command_publisher_;
 	rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ros_odometry_publisher_;
 	rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ros_gt_publisher_;
-
+	std::vector<geometry_msgs::msg::Pose> gt_pose_history_;
+	rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_pub_;
 	rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_subscriber_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_subscriber_;
 
@@ -490,6 +562,9 @@ private:
 
     rclcpp::Time start_time_;
     bool started_ = false;
+
+	std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+	std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
 };
 

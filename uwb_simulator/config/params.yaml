@@ -1,6 +1,6 @@
 measurement_simulator:
   ros__parameters:
-    measurement_noise_std: 0.1
+    measurement_noise_std: 0.12
     pub_rate: 10.0
     add_outliers: True
     use_sim_time: True
@@ -13,14 +13,14 @@ odometry_simulator:
     total_distance: 100
     pub_rate: 10.0
     use_sim_time: True
-    uav_origin: [2.0, 0.0, 2.0, 0.0] #xyz yaw
+    uav_origin: [0.5, -0.5, 2.0, 0.150] #xyz yaw
     ground_vehicle_origin: [0.0, 0.0, 0.0, 0.0] #xyz yaw
     linear_velocity_range: [0.1, 1.0]
     max_linear_acceleration: 0.5 #m/s²
     max_angular_acceleration: 0.25 # rad/s²
     angular_velocity_range: [-0.5, 0.5]
-    odom_error_position: 0.0 # %,  meters for every 100 meters traveled
-    odom_error_angle: 0.0 # % degrees for every 100 degrees
+    odom_error_position: 2.0 # %,  meters for every 100 meters traveled
+    odom_error_angle: 2.0 # % degrees for every 100 degrees
     anchors:
       a1:
         id: "0x0009D6" 

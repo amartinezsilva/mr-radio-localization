@@ -25,6 +25,7 @@ find_package(eliko_messages REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/UpdatePointClouds.srv"
@@ -60,7 +61,7 @@ target_link_libraries(pose_optimization_lib
 )
 
 ament_target_dependencies(pose_optimization_lib
-  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs
+  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs
   tf2_ros tf2_geometry_msgs eliko_messages pcl_ros pcl_conversions
 )
 
@@ -81,7 +82,7 @@ ament_export_targets(export_pose_optimization_lib HAS_LIBRARY_TARGET)
 # Export headers + dependencies to downstream packages (optional but tidy)
 ament_export_include_directories(include)
 ament_export_dependencies(
-  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs
+  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs
   tf2_ros tf2_geometry_msgs eliko_messages pcl_ros pcl_conversions
   Ceres Sophus small_gicp PCL
 )
@@ -98,7 +99,7 @@ target_include_directories(pose_optimization_node PUBLIC ${PUBLIC_INC})
 target_compile_features(pose_optimization_node PUBLIC c_std_99 cxx_std_17)
 target_link_libraries(pose_optimization_node pose_optimization_lib)
 ament_target_dependencies(pose_optimization_node
-  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs
+  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs
   tf2_ros tf2_geometry_msgs eliko_messages pcl_ros pcl_conversions
 )
 rosidl_target_interfaces(pose_optimization_node
@@ -154,6 +155,7 @@ install(TARGETS
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
 
 
 if(BUILD_TESTING)

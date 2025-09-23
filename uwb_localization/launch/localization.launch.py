@@ -12,6 +12,7 @@ def generate_launch_description():
     package_dir = get_package_share_directory('uwb_localization')
 
     config = os.path.join(package_dir, 'config', 'params.yaml')
+    rviz_config = os.path.join(package_dir, 'rviz', 'config.rviz')
 
     # Put here the path to the simulation bag you want to use
     path_to_bag = "/home/amarsil/radio_ws/datasets_sim/dataset_lemniscate"
@@ -30,15 +31,23 @@ def generate_launch_description():
         parameters=[config]
         )
     
+    rviz = Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            output='screen',
+            parameters=[{'use_sim_time': True}],
+            arguments=['-d', rviz_config],
+        )
+    
     bag_full = ExecuteProcess(
         cmd=['ros2', 'bag', 'play', path_to_bag, '--clock'],
         output='screen'
     )
 
-    # nodes_to_execute = [node1, node2]
-    nodes_to_execute = [node1]
+    nodes_to_execute = [node1, node2, rviz]
 
-    nodes_to_execute.append(bag_full)
+    # nodes_to_execute.append(bag_full)
 
     
     return LaunchDescription(nodes_to_execute)

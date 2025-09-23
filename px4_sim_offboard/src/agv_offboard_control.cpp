@@ -34,6 +34,12 @@
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
+
+#include <visualization_msgs/msg/marker_array.hpp>
+
 using namespace std::chrono_literals;
 using namespace px4_msgs::msg;
 
@@ -122,6 +128,9 @@ private:
 
     rclcpp::Publisher<eliko_messages::msg::DistancesList>::SharedPtr distances_list_pub_;
 
+	std::vector<geometry_msgs::msg::Pose> gt_pose_history_;
+	rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_pub_;
+
     rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_subscriber_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_subscriber_;
 
@@ -152,6 +161,10 @@ private:
 
     // Odometry gating/zeroing
     bool map_aligned_{false};
+
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+
 };
 
 AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
@@ -180,10 +193,16 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
     this->declare_parameter<std::string>("anchors.a2.id", "0x0009E5");
     this->declare_parameter<std::string>("anchors.a3.id", "0x0016FA");
     this->declare_parameter<std::string>("anchors.a4.id", "0x0016CF");
-
+    this->declare_parameter<std::vector<double>>("anchors.a1.position", {0.0,0.0,0.0});
+    this->declare_parameter<std::vector<double>>("anchors.a2.position", {0.0,0.0,0.0});
+    this->declare_parameter<std::vector<double>>("anchors.a3.position", {0.0,0.0,0.0});
+    this->declare_parameter<std::vector<double>>("anchors.a4.position", {0.0,0.0,0.0});
+    
     // Declare tag IDs
     this->declare_parameter<std::string>("tags.t1.id", "0x001155");
     this->declare_parameter<std::string>("tags.t2.id", "0x001397");
+    this->declare_parameter<std::vector<double>>("tags.t1.position", {0.0,0.0,0.0});
+    this->declare_parameter<std::vector<double>>("tags.t2.position", {0.0,0.0,0.0});
 
 
     // Load parameters
@@ -251,9 +270,34 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
     ros_gt_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(ros_gt_topic_, 10);
     distances_list_pub_ = this->create_publisher<eliko_messages::msg::DistancesList>("eliko/Distances", 10);
 
+    marker_array_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("agv/gt_marker_array", 10);
+
     start_time_ = this->get_clock()->now();
 
-   vehicle_odometry_subscriber_ = this->create_subscription<VehicleOdometry>(
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+    static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
+   
+    // Publish static transforms for anchors (relative to agv/base_link)
+    for (const auto& anchor : {"a1", "a2", "a3", "a4"}) {
+        std::vector<double> anchor_pos;
+        std::string param_name = "anchors." + std::string(anchor) + ".position";
+        if (this->get_parameter(param_name, anchor_pos) && anchor_pos.size() == 3) {
+            geometry_msgs::msg::TransformStamped tf;
+            tf.header.stamp = this->get_clock()->now();
+            tf.header.frame_id = "agv/base_link";
+            tf.child_frame_id = "agv/" + std::string(anchor);
+            tf.transform.translation.x = anchor_pos[0];
+            tf.transform.translation.y = anchor_pos[1];
+            tf.transform.translation.z = anchor_pos[2];
+            tf.transform.rotation.x = 0.0;
+            tf.transform.rotation.y = 0.0;
+            tf.transform.rotation.z = 0.0;
+            tf.transform.rotation.w = 1.0;
+            static_tf_broadcaster_->sendTransform(tf);
+        }
+    }
+   
+    vehicle_odometry_subscriber_ = this->create_subscription<VehicleOdometry>(
     vehicle_odometry_topic_, rclcpp::SensorDataQoS(),
     [this](VehicleOdometry::SharedPtr msg) {
 
@@ -460,6 +504,41 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
             pose_msg.pose.orientation.w = q_world_enu.w();
             ros_gt_publisher_->publish(pose_msg);
 
+            geometry_msgs::msg::TransformStamped tf_msg;
+            tf_msg.header.stamp = pose_msg.header.stamp;
+            tf_msg.header.frame_id = "map";
+            tf_msg.child_frame_id = "agv/base_link";
+            tf_msg.transform.translation.x = pos_enu_world.x();
+            tf_msg.transform.translation.y = pos_enu_world.y();
+            tf_msg.transform.translation.z = pos_enu_world.z();
+            tf_msg.transform.rotation = pose_msg.pose.orientation;
+            tf_broadcaster_->sendTransform(tf_msg);
+
+            // Publish marker array
+            gt_pose_history_.push_back(pose_msg.pose);
+            if (gt_pose_history_.size() > 500.0) {
+                gt_pose_history_.erase(gt_pose_history_.begin());
+            }
+            visualization_msgs::msg::MarkerArray marker_array;
+            for (size_t i = 0; i < gt_pose_history_.size(); ++i) {
+                visualization_msgs::msg::Marker marker;
+                marker.header = pose_msg.header;
+                marker.ns = "agv_gt";
+                marker.id = i;
+                marker.type = visualization_msgs::msg::Marker::SPHERE;
+                marker.action = visualization_msgs::msg::Marker::ADD;
+                marker.pose = gt_pose_history_[i];
+                marker.scale.x = 0.1;
+                marker.scale.y = 0.1;
+                marker.scale.z = 0.1;
+                marker.color.r = 1.0;
+                marker.color.g = 0.0;
+                marker.color.b = 0.0;
+                marker.color.a = 1.0;
+                marker.lifetime = rclcpp::Duration(0,0); // forever
+                marker_array.markers.push_back(marker);
+            }
+            marker_array_pub_->publish(marker_array);
 
         });
 

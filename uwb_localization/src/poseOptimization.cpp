@@ -32,6 +32,7 @@
 #include <small_gicp/pcl/pcl_registration.hpp>
 #include <small_gicp/util/downsampling_omp.hpp>
 
+
 using std::placeholders::_1;
 
 namespace uwb_localization {
@@ -84,6 +85,10 @@ PoseOptimizationNode::PoseOptimizationNode() : rclcpp::Node("pose_optimization_n
     poses_agv_publisher_ = this->create_publisher<PoseWithCovArray>(
         "pose_graph_node/agv_poses", 10);
 
+    // Add these publishers in your constructor:
+    agv_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("agv_pose_markers", 10);
+    uav_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("uav_pose_markers", 10);
+
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
     double global_opt_rate_s = 1.0 / opt_timer_rate_;
@@ -91,7 +96,7 @@ PoseOptimizationNode::PoseOptimizationNode() : rclcpp::Node("pose_optimization_n
         std::chrono::milliseconds(int(global_opt_rate_s * 1000)),
         std::bind(&PoseOptimizationNode::globalOptCb, this));
 
-    global_frame_graph_ = "graph_odom";
+    global_frame_graph_ = "map";
     eliko_frame_id_ = "agv_opt"; // simulation: "agv_gt" or odom variant
     uav_frame_id_ = "uav_opt";
 
@@ -144,6 +149,27 @@ void PoseOptimizationNode::getMetrics() const {
   } else {
     RCLCPP_WARN(this->get_logger(), "No solver runs have completed yet.");
   }
+}
+
+visualization_msgs::msg::Marker createPoseMarker(
+    const geometry_msgs::msg::Pose& pose, int id, const std::string& frame_id, float r, float g, float b)
+{
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = frame_id;
+    marker.header.stamp = rclcpp::Clock().now();
+    marker.ns = "poses";
+    marker.id = id;
+    marker.type = visualization_msgs::msg::Marker::SPHERE;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose = pose;
+    marker.scale.x = 0.2;
+    marker.scale.y = 0.2;
+    marker.scale.z = 0.2;
+    marker.color.r = r;
+    marker.color.g = g;
+    marker.color.b = b;
+    marker.color.a = 1.0;
+    return marker;
 }
 
 
@@ -1520,6 +1546,33 @@ void PoseOptimizationNode::globalOptCb() {
 
             anchor_agv_publisher_->publish(anchor_agv);
             anchor_uav_publisher_->publish(anchor_uav);
+
+            visualization_msgs::msg::MarkerArray agv_markers, uav_markers;
+
+            // AGV markers
+            for (size_t i = 0; i < agv_poses.array.size(); ++i) {
+                const auto& pose_msg = agv_poses.array[i].pose.pose;
+                Sophus::SE3d local_T = transformSE3FromPoseMsg(pose_msg);
+                Sophus::SE3d global_T = anchor_node_agv_.pose * local_T;
+                geometry_msgs::msg::Pose global_pose = buildPoseMsg(global_T, Eigen::Matrix4d::Identity(), current_time, global_frame_graph_).pose.pose;
+                auto marker = createPoseMarker(global_pose, i, global_frame_graph_, 1.0f, 0.0f, 0.0f);
+                marker.ns = "agv_poses";
+                agv_markers.markers.push_back(marker);
+            }
+
+            // UAV markers
+            for (size_t i = 0; i < uav_poses.array.size(); ++i) {
+                const auto& pose_msg = uav_poses.array[i].pose.pose;
+                Sophus::SE3d local_T = transformSE3FromPoseMsg(pose_msg);
+                Sophus::SE3d global_T = anchor_node_uav_.pose * local_T;
+                geometry_msgs::msg::Pose global_pose = buildPoseMsg(global_T, Eigen::Matrix4d::Identity(), current_time, global_frame_graph_).pose.pose;
+                auto marker = createPoseMarker(global_pose, i, global_frame_graph_, 0.0f, 0.0f, 1.0f);
+                marker.ns = "uav_poses";
+                uav_markers.markers.push_back(marker);
+            }
+
+            agv_marker_pub_->publish(agv_markers);
+            uav_marker_pub_->publish(uav_markers);
             
         }
 
