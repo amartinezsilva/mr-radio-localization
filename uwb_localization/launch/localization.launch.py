@@ -14,9 +14,10 @@ def generate_launch_description():
     config = os.path.join(package_dir, 'config', 'params.yaml')
     rviz_config = os.path.join(package_dir, 'rviz', 'config.rviz')
 
-    # Put here the path to the simulation bag you want to use
-    path_to_bag = "/home/amarsil/radio_ws/datasets_sim/dataset_lemniscate"
-        
+    # Put here the path to the simulation bag you want to use, inside the  /bags folder
+    bag_name = "dataset_lemniscate"
+    path_to_bag = os.path.join(package_dir, 'bags', bag_name)
+    
     node1 = Node(
                 package='uwb_localization',
                 executable='global_opt_node_eliko',
@@ -45,9 +46,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    nodes_to_execute = [node1, node2, rviz]
-
-    # nodes_to_execute.append(bag_full)
-
+    nodes_to_execute = [node1, node2, bag_full]
     
     return LaunchDescription(nodes_to_execute)
