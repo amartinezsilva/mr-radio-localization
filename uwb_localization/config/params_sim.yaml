@@ -17,7 +17,7 @@ eliko_global_opt_node:
     use_ransac: true # use ransac algorithm with the prior
     moving_average: true
     moving_average_max_samples: 10
-    agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y [-2.805, -1.951, 0.0, 0.0, 0.0, -0.102]
+    agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y
     uav_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y
     anchors:
       # Dynamic layout: ids and positions are aligned by index.

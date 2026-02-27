@@ -10,7 +10,7 @@ def generate_launch_description():
     package_dir = get_package_share_directory('uwb_localization')
     package_sim_dir = get_package_share_directory('uwb_simulator')
 
-    config = os.path.join(package_dir, 'config', 'params.yaml')
+    config = os.path.join(package_dir, 'config', 'params_sim.yaml')
     config_sim = os.path.join(package_sim_dir, 'config', 'params.yaml')
            
     
