@@ -29,6 +29,8 @@
 #include <mutex>
 #include <cmath>
 #include <limits>
+#include <cctype>
+#include <stdexcept>
 
 #include <random> 
 
@@ -63,6 +65,11 @@ private:
     void publish_trajectory_setpoint();
     void publish_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0);
     void publish_distances();
+    bool loadSensorIdsFromArrayParam(const std::string &param_name,
+                                     const std::string &prefix,
+                                     std::unordered_map<std::string, std::string> &out_map,
+                                     std::vector<std::string> &out_keys);
+    bool parseAnchorTagKey(const std::string &key, std::string &anchor_key, std::string &tag_key) const;
 
     // Retrieve parameter values
     std::string offboard_control_mode_topic_;
@@ -129,19 +136,11 @@ private:
     std::unordered_map<std::string, double> uwb_distances_;
     std::mutex uwb_mutex_;
     std::vector<rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr> uwb_subscribers_;
-    const std::vector<std::string> uwb_topic_names_ = {
-        "/uwb_gz_simulator/distances/a1t1",
-        "/uwb_gz_simulator/distances/a1t2",
-        "/uwb_gz_simulator/distances/a2t1",
-        "/uwb_gz_simulator/distances/a2t2",
-        "/uwb_gz_simulator/distances/a3t1",
-        "/uwb_gz_simulator/distances/a3t2",
-        "/uwb_gz_simulator/distances/a4t1",
-        "/uwb_gz_simulator/distances/a4t2"
-    };
+    std::vector<std::string> uwb_topic_names_;
 
     std::unordered_map<std::string, std::string> anchor_ids_;
     std::unordered_map<std::string, std::string> tag_ids_;
+    std::vector<std::string> anchor_keys_, tag_keys_;
 
     rclcpp::Time start_time_;
     bool started_ = false;
@@ -175,15 +174,9 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
 
     this->declare_parameter<std::vector<double>>("agv_origin", {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
 
-    // Declare anchor IDs
-    this->declare_parameter<std::string>("anchors.a1.id", "0x0009D6");
-    this->declare_parameter<std::string>("anchors.a2.id", "0x0009E5");
-    this->declare_parameter<std::string>("anchors.a3.id", "0x0016FA");
-    this->declare_parameter<std::string>("anchors.a4.id", "0x0016CF");
-
-    // Declare tag IDs
-    this->declare_parameter<std::string>("tags.t1.id", "0x001155");
-    this->declare_parameter<std::string>("tags.t2.id", "0x001397");
+    // Dynamic anchor/tag IDs (required)
+    this->declare_parameter<std::vector<std::string>>("anchors.ids", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("tags.ids", std::vector<std::string>{});
 
 
     // Load parameters
@@ -226,18 +219,35 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
 				Eigen::AngleAxisd(yaw,   Eigen::Vector3d::UnitZ()) *
 				Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
 				Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX());
-		}
+			}
 
 
-    // Get anchor IDs
-    this->get_parameter("anchors.a1.id", anchor_ids_["a1"]);
-    this->get_parameter("anchors.a2.id", anchor_ids_["a2"]);
-    this->get_parameter("anchors.a3.id", anchor_ids_["a3"]);
-    this->get_parameter("anchors.a4.id", anchor_ids_["a4"]);
+    const bool loaded_dynamic_anchors = loadSensorIdsFromArrayParam("anchors.ids", "a", anchor_ids_, anchor_keys_);
+    const bool loaded_dynamic_tags = loadSensorIdsFromArrayParam("tags.ids", "t", tag_ids_, tag_keys_);
 
-    // Get tag IDs
-    this->get_parameter("tags.t1.id", tag_ids_["t1"]);
-    this->get_parameter("tags.t2.id", tag_ids_["t2"]);
+    if (!loaded_dynamic_anchors || !loaded_dynamic_tags) {
+        RCLCPP_FATAL(
+            this->get_logger(),
+            "Invalid UWB config. Required params: anchors.ids and tags.ids.");
+        throw std::runtime_error("Missing required dynamic anchor/tag ID parameters.");
+    }
+
+    if (anchor_keys_.empty() || tag_keys_.empty()) {
+        RCLCPP_FATAL(this->get_logger(), "Invalid UWB config: loaded %zu anchors and %zu tags.",
+                     anchor_keys_.size(), tag_keys_.size());
+        throw std::runtime_error("Empty anchor/tag configuration for AGV offboard control.");
+    }
+
+    uwb_topic_names_.clear();
+    for (const auto &anchor_key : anchor_keys_) {
+        for (const auto &tag_key : tag_keys_) {
+            uwb_topic_names_.push_back("/uwb_gz_simulator/distances/" + anchor_key + tag_key);
+        }
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "Configured %zu anchors and %zu tags (%zu UWB topics).",
+                anchor_keys_.size(), tag_keys_.size(), uwb_topic_names_.size());
 
     std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
     std::string full_csv_path = package_path + "/trajectories_positions/" + traj_file_;
@@ -479,6 +489,70 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
 
 }
 
+bool AGVOffboardControl::loadSensorIdsFromArrayParam(
+    const std::string &param_name,
+    const std::string &prefix,
+    std::unordered_map<std::string, std::string> &out_map,
+    std::vector<std::string> &out_keys)
+{
+    std::vector<std::string> ids;
+    this->get_parameter(param_name, ids);
+    if (ids.empty()) {
+        RCLCPP_ERROR(this->get_logger(), "Parameter '%s' must be a non-empty string array.", param_name.c_str());
+        return false;
+    }
+
+    out_map.clear();
+    out_keys.clear();
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i].empty()) {
+            RCLCPP_WARN(this->get_logger(), "Ignoring empty ID in '%s' at index %zu.", param_name.c_str(), i);
+            continue;
+        }
+        const std::string key = prefix + std::to_string(i + 1);
+        out_map[key] = ids[i];
+        out_keys.push_back(key);
+    }
+
+    if (out_keys.empty()) {
+        RCLCPP_WARN(this->get_logger(), "No valid IDs found in '%s'.", param_name.c_str());
+        return false;
+    }
+
+    return true;
+}
+
+bool AGVOffboardControl::parseAnchorTagKey(
+    const std::string &key,
+    std::string &anchor_key,
+    std::string &tag_key) const
+{
+    // Expected format: a<digits>t<digits> (e.g., a1t2, a12t3)
+    if (key.size() < 4 || key[0] != 'a') {
+        return false;
+    }
+
+    const size_t t_pos = key.find('t', 1);
+    if (t_pos == std::string::npos || t_pos <= 1 || t_pos >= key.size() - 1) {
+        return false;
+    }
+
+    for (size_t i = 1; i < t_pos; ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(key[i]))) {
+            return false;
+        }
+    }
+    for (size_t i = t_pos + 1; i < key.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(key[i]))) {
+            return false;
+        }
+    }
+
+    anchor_key = key.substr(0, t_pos);  // "a12"
+    tag_key = key.substr(t_pos);        // "t3"
+    return true;
+}
+
 void AGVOffboardControl::timer_callback()
 {
 
@@ -694,10 +768,13 @@ void AGVOffboardControl::publish_distances()
         for (const auto& [topic, distance] : uwb_distances_) {
             // Parse topic like "/uwb_gz_simulator/distances/a1t2"
             std::string key = topic.substr(topic.find_last_of('/') + 1); // "a1t2"
-            if (key.size() != 4) continue;
-
-            std::string anchor_key = key.substr(0, 2); // "a1"
-            std::string tag_key = key.substr(2, 2);    // "t2"
+            std::string anchor_key, tag_key;
+            if (!parseAnchorTagKey(key, anchor_key, tag_key)) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                     "Ignoring malformed UWB key '%s' from topic '%s'.",
+                                     key.c_str(), topic.c_str());
+                continue;
+            }
 
             if (anchor_ids_.count(anchor_key) && tag_ids_.count(tag_key)) {
                 eliko_messages::msg::Distances d;

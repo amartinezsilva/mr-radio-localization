@@ -78,6 +78,18 @@ This package includes an enhanced simulator for relative localization which is i
 
 * ```uwb_gz_simulation``` includes a ```models``` folder with modified versions the differential rover ```r1_rover``` and the ```x500``` UAV with UWB anchors and tags mounted onboard each respective platform, which act as drop-in replacements for the existing ones. Reference for the original models can be found [here](https://docs.px4.io/main/en/sim_gazebo_gz/vehicles.html). The folder ```uwb_gazebo_plugin``` contains a custom plugin that reports distances between each anchor and tag, which is meant to be included under the plugins directory of PX4-Autopilot. 
 
+  You can regenerate UWB anchor/tag counts and positions with:
+  ```
+  python3 uwb_gz_simulation/tools/configure_uwb_layout.py \
+    --layout uwb_gz_simulation/uwb_layout.example.json
+  ```
+  The layout JSON expects two arrays:
+  - `anchors`: `[[x,y,z], ...]` mounted on `r1_rover`
+  - `tags`: `[[x,y,z], ...]` mounted on `x500_base`
+  This also regenerates bridge configs for all `aItJ` topic pairs:
+  - `uwb_gz_simulation/uwb_bridge.yaml`
+  - `px4_sim_offboard/config/uwb_bridge.yaml` (used by `offboard_launch.py`)
+
 * ```px4_sim_offboard``` includes a set of nodes that interact with the simulator, allowing to obtain sensor readings and input commands to each of the vehicles. It includes a simple trajectory tracker for each of the robots. It also parses messages from ```px4_msgs``` format to standard ROS formats, for better integration with the optimizer. 
 
 ### Setup instructions (Ubuntu 24.04)
