@@ -7,6 +7,37 @@ DEFAULT_ROS_WS="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
+LAUNCH_LOCALIZATION=0
+
+print_usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--localization]
+
+Options:
+  --localization  Launch uwb_localization as well as the simulator and record the extended topic set.
+  -h, --help           Show this help message.
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --localization)
+        LAUNCH_LOCALIZATION=1
+        ;;
+      -h|--help)
+        print_usage
+        exit 0
+        ;;
+      *)
+        echo "[ERROR] Unknown argument: $1" >&2
+        print_usage >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
 
 find_qgc() {
   local candidate
@@ -49,6 +80,7 @@ build_ros_shell_command() {
 }
 
 QGC_PATH="$(find_qgc || true)"
+parse_args "$@"
 
 if [[ -z "$QGC_PATH" ]]; then
   echo "[ERROR] QGroundControl AppImage not found. Set QGC_PATH or place it in ~/Desktop or ~/Downloads." >&2
@@ -167,21 +199,13 @@ tmux select-layout -t $SESSION:1 tiled
 tmux send-keys -t $SESSION:1.0 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /agv/odom")" C-m
 tmux send-keys -t $SESSION:1.1 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /uav/odom")" C-m
 
-# UWB localization launch (to simulate and optimize at the same time)
-# tmux send-keys -t $SESSION:1.2 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 launch uwb_localization localization.launch.py")" C-m
-# tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record \
-#   /uav/gt \
-#   /agv/gt \
-#   /uav/odom \
-#   /agv/odom \
-#   /eliko_optimization_node/optimized_T \
-#   /eliko_optimization_node/optimized_T_nopr \
-#   /eliko_optimization_node/ransac_optimized_T \
-#   /pose_graph_node/uav_anchor \
-#   /pose_graph_node/agv_anchor")" C-m
-
-#Record all ROS 2 topics (Post-processing version)
-tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko/Distances")" C-m
+if (( LAUNCH_LOCALIZATION )); then
+  tmux send-keys -t $SESSION:1.2 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 launch uwb_localization localization.launch.py")" C-m
+  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko_optimization_node/optimized_T /eliko_optimization_node/optimized_T_nopr /eliko_optimization_node/ransac_optimized_T /pose_graph_node/uav_anchor /pose_graph_node/agv_anchor")" C-m
+else
+  # Record the baseline ROS 2 topics for post-processing.
+  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko/Distances")" C-m
+fi
 
 
 # Attach

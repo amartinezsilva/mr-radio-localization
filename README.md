@@ -41,17 +41,15 @@ Clone this repository along with the dependency packages to your ROS 2 workspace
 
 This repository contains two ROS2 packages:
 
-* ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes.
+* ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
-![](images/real_diagram.drawio.png)
-
-* ```uwb_simulator```: includes the odometry simulation node and the measurement simulation node.  The ```config``` folder in this package contains the parameter file for these two nodes.
-
-![](images/basic_sim_diagram_simulation.drawio.png)
 
 * ```uwb_gz_simulator```: includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL (see instructions below).  The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
 
-![](images/SITL_simulation.drawio.png)
+![](images/Combined_Diagram.drawio.png)
+
+* ```uwb_simulator```: includes a very basic odometry simulation node and a range measurement simulation node (no SITL, no radar) using generic odometry and a basic measurement model, meant for debugging purposes only.  The ```config``` folder in this package contains the parameter file for these two nodes.
+![](images/basic_sim_diagram_simulation.drawio.png)
 
 
 ## Launch files
@@ -146,6 +144,12 @@ export QGC_PATH=/path/to/QGroundControl.AppImage
 cd <ros2_ws>/src/mr-radio-localization
 chmod +x simulator_launcher.sh
 ./simulator_launcher.sh
+```
+
+Due to the computational demands of the simulator, we recommend to record the robot trajectories to a bag file first, store it under ``uwb_localization/bags`` and then run ``localization.launch.py`` providing the name to the recorded bag. However, you can still run the relative localization at the same time by using this command:
+
+```
+./simulator_launcher.sh --with-localization
 ```
 
 Note that the simulator takes a while to load. After about 30 seconds, you should see the two robots start to move. 
