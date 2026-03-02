@@ -84,6 +84,14 @@ This package includes an enhanced simulator for relative localization which is i
   The layout JSON expects two arrays:
   - `anchors`: `[[x,y,z], ...]` mounted on `r1_rover`
   - `tags`: `[[x,y,z], ...]` mounted on `x500_base`
+  The ordering is positional and defines the sensor indices used everywhere else:
+  - `anchors[0] -> a1`, `anchors[1] -> a2`, ...
+  - `tags[0] -> t1`, `tags[1] -> t2`, ...
+  As a result, the generated Gazebo range topics follow the same numbering (for example, `a1t2` means the first anchor entry and the second tag entry in the layout JSON).
+  The ID arrays in `px4_sim_offboard/config/agv_offboard_params.yaml` must be kept in the same order:
+  - `anchors.ids[0]` is the serial number assigned to `a1`
+  - `tags.ids[0]` is the serial number assigned to `t1`
+  If you reorder the `anchors` or `tags` arrays in the layout JSON, reorder the corresponding `anchors.ids` / `tags.ids` arrays as well so the published IDs still match the intended physical sensor positions.
   This also regenerates bridge configs for all `aItJ` topic pairs:
   - `uwb_gz_simulation/uwb_bridge.yaml`
   - `px4_sim_offboard/config/uwb_bridge.yaml` (used by `offboard_launch.py`)
