@@ -125,7 +125,7 @@ graceful_shutdown() {
 trap graceful_shutdown EXIT INT TERM
 
 # Kill any previous session
-tmux kill-session -t $SESSION 2>/dev/null
+tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # Start new tmux session
 tmux new-session -d -s $SESSION
@@ -149,7 +149,7 @@ tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE=
 tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=default \"$PX4_BIN\" -i 2" C-m
 
 # Wait for everything to launch and spawn and then launch the ROS 2 nodes
-# tmux send-keys -t $SESSION:0.4 "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && ros2 launch px4_sim_offboard offboard_launch.py")" C-m
+tmux send-keys -t $SESSION:0.4 "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && ros2 launch px4_sim_offboard offboard_launch.py")" C-m
 tmux send-keys -t $SESSION:0.5 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /eliko/Distances")" C-m
 
 #odometry window
