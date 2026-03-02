@@ -132,13 +132,19 @@ make px4_sitl
 
 11) Add this package and its dependencies to your workspace.
 
-12) Update ```simulator_launcher.sh``` with the paths to your ROS 2 workspace, your PX4-Autopilot installation folder and the location of the QGC executable. By default, the script assumes that PX4 and the ROS 2 ws are on the root folder, and QGC is in ```~/Desktop```. 
+12) The script ``simulator_launcher.sh`` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
+
+```
+export ROS_WS=/path/to/your_ws
+export PX4_DIR=/path/to/PX4-Autopilot
+export QGC_PATH=/path/to/QGroundControl.AppImage
+```
 
 13) Give permissions to the simulator script and execute it: 
 
 ```
-cd <ros2_ws>/mr-radio-localization
-sudo chmod +x simulator_launcher.sh
+cd <ros2_ws>/src/mr-radio-localization
+chmod +x simulator_launcher.sh
 ./simulator_launcher.sh
 ```
 
@@ -165,14 +171,10 @@ sudo make install
 sudo apt-get install libtclap-dev
 ```
 
-* When using the SITL, if you have a common workspace with all dependencies listed in this repo, the first time you run ``colcon build`` it may fail due to CMake being unable to find ``px4_ros_com``. Please make sure you have first compiled and sourced the PX4 dependencies, then compile the rest of the packages:
+* Older revisions of this repository may fail on the first ``colcon build`` because ``px4_sim_offboard/package.xml`` did not declare ``px4_ros_com`` as a dependency. The current version already includes that dependency, so a normal workspace build should resolve the package order correctly. If you are using an older checkout, update the repository or add the missing dependency manually:
 
-```
-cd <your_ws>
-colcon build --packages-select px4_msgs px4_ros_com
-source install/setup.bash
-colcon build
-source install/setup.bash
+```xml
+<depend>px4_ros_com</depend>
 ```
 
 * In Ubuntu 24.04 LTS and ROS 2 Jazzy, there is a [previously reported issue](https://discuss.px4.io/t/dds-faild-to-connect-ros2-jazzy/47966/3) that prevents the MicroXRCE Agent from connecting to the PX4 topics. This is because, when building the Micro-XRCE-DDS Agent on Ubuntu 24.04 (ROS 2 Jazzy) as part of the SITL setup, there may be a conflict between the locally built libraries (FastDDS/FastCDR) and the ones provided by the ROS 2 Jazzy default installation (``opt/ros``). The more straightforward workaround would be to tell your shell to look at your local build folders before the ROS folders by placing your paths at the beginning of the ``LD_LIBRARY_PATH``. To do it, find exactly where your libraries are located (replace ``path`` with the directory where you have cloned Micro-XRCE-DDS-Agent).
