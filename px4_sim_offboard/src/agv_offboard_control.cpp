@@ -250,7 +250,7 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
                 anchor_keys_.size(), tag_keys_.size(), uwb_topic_names_.size());
 
     std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
-    std::string full_csv_path = package_path + "/trajectories_positions/" + traj_file_;
+    std::string full_csv_path = package_path + "/trajectories/" + traj_file_;
     load_trajectory(full_csv_path);
 
     offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(offboard_control_mode_topic_, 10);
