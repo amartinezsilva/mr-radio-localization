@@ -17,6 +17,12 @@ from scipy.signal import savgol_filter
 # Flag to compare three relative transformation estimation methods
 sim_compare = False
 
+# odometry origins in world ENU.
+# Update these values to match the spawn poses in SITL or the starting map locations in real datasets 
+# Format: [x, y, z, roll, pitch, yaw]
+AGV_ODOM_ORIGIN_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+UAV_ODOM_ORIGIN_POSE = [0.5, -0.5, 0.0, 0.0, 0.0, 0.524]
+
 # === for paper‐quality bigger fonts ===
 mpl.rcParams.update({
     'font.size':         28,   # base font size
@@ -681,23 +687,21 @@ def plot_experiment_data(path_experiment_data, path_folder, experiment_type = "s
     target_gt_data_df = read_pandas_df(path_experiment_data, columns_target_gt_data, 
                                         timestamp_col=time_data_setpoint, max_timestamp=max_timestamp_uav)
     
-    # Extract origin from the first UGV GT pose
-    first_agv_row = source_gt_data_df.iloc[0]
-    agv_pos = first_agv_row[[source_gt_x_data, source_gt_y_data, source_gt_z_data]].values
-    agv_quat = first_agv_row[[source_gt_q0_data, source_gt_q1_data, source_gt_q2_data, source_gt_q3_data]].values
-    agv_rpy = R.from_quat(agv_quat).as_euler('zyx', degrees=False)  # yaw, pitch, roll
-    source_odom_origin = pose_to_matrix(np.concatenate((agv_pos, agv_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
-    source_odom_origin = pose_to_matrix([13.351, 27.385, 0.636, 0.001, 0.001, 3.079])  # [x, y, z, roll, pitch, yaw]
+    source_odom_origin = pose_to_matrix(AGV_ODOM_ORIGIN_POSE)
+    target_odom_origin = pose_to_matrix(UAV_ODOM_ORIGIN_POSE)
+        
+    # #infer the local odom origin from the first GT pose.
+    # first_agv_row = source_gt_data_df.iloc[0]
+    # agv_pos = first_agv_row[[source_gt_x_data, source_gt_y_data, source_gt_z_data]].values
+    # agv_quat = first_agv_row[[source_gt_q0_data, source_gt_q1_data, source_gt_q2_data, source_gt_q3_data]].values
+    # agv_rpy = R.from_quat(agv_quat).as_euler('zyx', degrees=False)
+    # source_odom_origin = pose_to_matrix(np.concatenate((agv_pos, agv_rpy[::-1])))
 
-    # Extract origin from the first UAV GT pose
-    first_uav_row = target_gt_data_df.iloc[0]
-    uav_pos = first_uav_row[[target_gt_x_data, target_gt_y_data, target_gt_z_data]].values
-    uav_quat = first_uav_row[[target_gt_q0_data, target_gt_q1_data, target_gt_q2_data, target_gt_q3_data]].values
-    uav_rpy = R.from_quat(uav_quat).as_euler('zyx', degrees=False)
-    target_odom_origin = pose_to_matrix(np.concatenate((uav_pos, uav_rpy[::-1])))  # [x, y, z, roll, pitch, yaw]
-    # target_odom_origin = pose_to_matrix([5.0,-5.0,0.0,0.0,0.0,0.150])  # [x, y, z, roll, pitch, yaw]
-    # target_odom_origin = pose_to_matrix([0.5,-0.5,0.0,0.0,0.0,0.150])  # [x, y, z, roll, pitch, yaw]
-    target_odom_origin = pose_to_matrix([15.351, 23.385, 0.9, 0.0, 0.0, 0.028])  # [x, y, z, roll, pitch, yaw]
+    # first_uav_row = target_gt_data_df.iloc[0]
+    # uav_pos = first_uav_row[[target_gt_x_data, target_gt_y_data, target_gt_z_data]].values
+    # uav_quat = first_uav_row[[target_gt_q0_data, target_gt_q1_data, target_gt_q2_data, target_gt_q3_data]].values
+    # uav_rpy = R.from_quat(uav_quat).as_euler('zyx', degrees=False)
+    # target_odom_origin = pose_to_matrix(np.concatenate((uav_pos, uav_rpy[::-1])))
 
     t0 = target_gt_data_df[columns_target_gt_data[0]].iloc[0]
     
