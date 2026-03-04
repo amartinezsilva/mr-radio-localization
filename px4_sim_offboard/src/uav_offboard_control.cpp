@@ -67,6 +67,7 @@
 #include <sstream>
 #include <vector>
 #include <random>
+#include <stdexcept>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
@@ -151,8 +152,12 @@ public:
 		}
 		
 		std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
-		std::string full_csv_path = package_path + "/trajectories_positions/" + traj_file_;
+		std::string full_csv_path = package_path + "/trajectories/" + traj_file_;
 		load_trajectory(full_csv_path);
+		if (trajectory_.empty()) {
+			RCLCPP_FATAL(this->get_logger(), "No trajectory points were loaded from %s", full_csv_path.c_str());
+			throw std::runtime_error("Missing UAV trajectory data.");
+		}
 		initial_hover_target_ = trajectory_.front(); 
 
 		// Create publishers with the topics from params
@@ -172,15 +177,22 @@ public:
 			vehicle_odometry_topic_, qos_profile,
 			[this](const px4_msgs::msg::VehicleOdometry::SharedPtr msg) {
 
-			// --- PX4 NED -> ROS ENU (unchanged) ---
-			Eigen::Quaterniond q_ned(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
-			Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
+				if (msg->pose_frame != VehicleOdometry::POSE_FRAME_NED) {
+					RCLCPP_WARN_THROTTLE(
+						this->get_logger(),
+						*this->get_clock(),
+						2000,
+						"Unsupported UAV pose_frame %u. Expected POSE_FRAME_NED.",
+						msg->pose_frame);
+					return;
+				}
 
-			Eigen::Vector3d pos_ned(msg->position[0], msg->position[1], msg->position[2]);
-			Eigen::Vector3d pos_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
+				// --- PX4 NED -> ROS ENU pose ---
+				Eigen::Quaterniond q_ned(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
+				Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
 
-			Eigen::Vector3d vel_ned(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
-			Eigen::Vector3d vel_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(vel_ned);
+				Eigen::Vector3d pos_ned(msg->position[0], msg->position[1], msg->position[2]);
+				Eigen::Vector3d pos_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
 
 			// True ENU yaw from quaternion 
 			const Eigen::Vector3d rpy_true = q_enu.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX 
@@ -244,8 +256,8 @@ public:
 			// --- Fill and publish Odometry (NOISY pose) ---
 			nav_msgs::msg::Odometry odom_msg;
 			odom_msg.header.stamp = this->get_clock()->now();
-			odom_msg.header.frame_id = "/uav/odom";
-			odom_msg.child_frame_id = "/uav/base_link";
+				odom_msg.header.frame_id = "uav/odom";
+				odom_msg.child_frame_id = "uav/base_link";
 
 			// NOISY position
 			odom_msg.pose.pose.position.x = pos_noisy_enu_.x();
@@ -258,15 +270,30 @@ public:
 			odom_msg.pose.pose.orientation.z = q_noisy_enu.z();
 			odom_msg.pose.pose.orientation.w = q_noisy_enu.w();
 
-			// Keep linear velocity as the true ENU velocity (you can noise this too if desired)
-			odom_msg.twist.twist.linear.x = vel_enu.x();
-			odom_msg.twist.twist.linear.y = vel_enu.y();
-			odom_msg.twist.twist.linear.z = vel_enu.z();
+				Eigen::Vector3d vel_child_flu = Eigen::Vector3d::Zero();
+				if (msg->velocity_frame == VehicleOdometry::VELOCITY_FRAME_NED) {
+					Eigen::Vector3d vel_ned(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
+					Eigen::Vector3d vel_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(vel_ned);
+					vel_child_flu = q_noisy_enu.inverse() * vel_enu;
+				} else if (msg->velocity_frame == VehicleOdometry::VELOCITY_FRAME_BODY_FRD) {
+					vel_child_flu = Eigen::Vector3d(msg->velocity[0], -msg->velocity[1], -msg->velocity[2]);
+				} else {
+					RCLCPP_WARN_THROTTLE(
+						this->get_logger(),
+						*this->get_clock(),
+						2000,
+						"Unsupported UAV velocity_frame %u. Publishing zero linear twist.",
+						msg->velocity_frame);
+				}
 
-			// Keep angular velocity mapping as you had (PX4 -> ENU swap/sign)
-			odom_msg.twist.twist.angular.x = msg->angular_velocity[1];
-			odom_msg.twist.twist.angular.y = msg->angular_velocity[0];
-			odom_msg.twist.twist.angular.z = -msg->angular_velocity[2];
+				odom_msg.twist.twist.linear.x = vel_child_flu.x();
+				odom_msg.twist.twist.linear.y = vel_child_flu.y();
+				odom_msg.twist.twist.linear.z = vel_child_flu.z();
+
+				// PX4 angular velocity is BODY_FRD, convert to ROS child-frame FLU.
+				odom_msg.twist.twist.angular.x = msg->angular_velocity[0];
+				odom_msg.twist.twist.angular.y = -msg->angular_velocity[1];
+				odom_msg.twist.twist.angular.z = -msg->angular_velocity[2];
 
 
 			// Covariances: you can keep PX4 variances or inflate slightly since we add noise.
@@ -683,12 +710,6 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	double ez = target[2] - pose[2];
 	double dist = std::sqrt(ex*ex + ey*ey + ez*ez);
 
-	double dist_to_end = std::sqrt(
-		(trajectory_.back()[0] - pose[0]) * (trajectory_.back()[0] - pose[0]) +
-		(trajectory_.back()[1] - pose[1]) * (trajectory_.back()[1] - pose[1]) +
-		(trajectory_.back()[2] - pose[2]) * (trajectory_.back()[2] - pose[2])
-	);
-
 	// If we're very near the end of the path, trigger LAND (once)
 	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
 		land();
@@ -701,20 +722,6 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 		double ux = ex / dist, uy = ey / dist, uz = ez / dist;
 		vx = vmag * ux; vy = vmag * uy; vz = vmag * uz;
 	}
-
-	// // --- Full position setpoint (target point in world ENU -> local NED) ---
-	// Predict next position in world ENU with dt = 0.1 s
-    constexpr double dt = 0.1; // seconds (timer period)
-    Eigen::Vector3d p_pred_world_enu(
-        pose[0] + vx * dt,
-        pose[1] + vy * dt,
-        target[2]
-    );
-
-	 // Convert predicted position to local NED
-    Eigen::Vector3d p_pred_local_enu = origin_q_enu_.inverse() * (p_pred_world_enu - origin_pos_enu_);
-    Eigen::Vector3d p_pred_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(p_pred_local_enu);
-
 
 	// v_world_enu from your controller (vx, vy, vz in world ENU)
 	Eigen::Vector3d v_world_enu(vx, vy, vz);

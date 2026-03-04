@@ -252,6 +252,10 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
     std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
     std::string full_csv_path = package_path + "/trajectories/" + traj_file_;
     load_trajectory(full_csv_path);
+    if (trajectory_.empty()) {
+        RCLCPP_FATAL(this->get_logger(), "No trajectory points were loaded from %s", full_csv_path.c_str());
+        throw std::runtime_error("Missing AGV trajectory data.");
+    }
 
     offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(offboard_control_mode_topic_, 10);
     trajectory_setpoint_publisher_ = this->create_publisher<TrajectorySetpoint>(trajectory_setpoint_topic_, 10);
@@ -267,15 +271,22 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
     vehicle_odometry_topic_, rclcpp::SensorDataQoS(),
     [this](VehicleOdometry::SharedPtr msg) {
 
-        // --- Convert PX4 NED -> ROS ENU pose/vel ---
+        if (msg->pose_frame != VehicleOdometry::POSE_FRAME_NED) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                2000,
+                "Unsupported AGV pose_frame %u. Expected POSE_FRAME_NED.",
+                msg->pose_frame);
+            return;
+        }
+
+        // --- Convert PX4 NED -> ROS ENU pose ---
         Eigen::Quaterniond q_ned(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
         Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
 
         Eigen::Vector3d pos_ned(msg->position[0], msg->position[1], msg->position[2]);
         Eigen::Vector3d pos_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
-
-        Eigen::Vector3d vel_ned(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
-        Eigen::Vector3d vel_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(vel_ned);
 
         // True ENU yaw from quaternion
         const Eigen::Vector3d rpy_true = q_enu.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX
@@ -359,15 +370,29 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
         odom_msg.pose.pose.orientation.z = q_noisy_enu.z();
         odom_msg.pose.pose.orientation.w = q_noisy_enu.w();
 
-        // Twists should be in child (base_link, FLU):
-        Eigen::Vector3d v_child_flu = q_noisy_enu.inverse() * vel_enu;
+        // Twists should be in child (base_link, FLU).
+        Eigen::Vector3d v_child_flu = Eigen::Vector3d::Zero();
+        if (msg->velocity_frame == VehicleOdometry::VELOCITY_FRAME_NED) {
+            Eigen::Vector3d vel_ned(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
+            Eigen::Vector3d vel_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(vel_ned);
+            v_child_flu = q_noisy_enu.inverse() * vel_enu;
+        } else if (msg->velocity_frame == VehicleOdometry::VELOCITY_FRAME_BODY_FRD) {
+            v_child_flu = Eigen::Vector3d(msg->velocity[0], -msg->velocity[1], -msg->velocity[2]);
+        } else {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                2000,
+                "Unsupported AGV velocity_frame %u. Publishing zero linear twist.",
+                msg->velocity_frame);
+        }
         odom_msg.twist.twist.linear.x = v_child_flu.x();
         odom_msg.twist.twist.linear.y = v_child_flu.y();
         odom_msg.twist.twist.linear.z = v_child_flu.z();
 
-        // Angular velocity mapping PX4->ROS (keep as you had)
-        odom_msg.twist.twist.angular.x = msg->angular_velocity[1];
-        odom_msg.twist.twist.angular.y = msg->angular_velocity[0];
+        // PX4 angular velocity is BODY_FRD, convert to ROS child-frame FLU.
+        odom_msg.twist.twist.angular.x = msg->angular_velocity[0];
+        odom_msg.twist.twist.angular.y = -msg->angular_velocity[1];
         odom_msg.twist.twist.angular.z = -msg->angular_velocity[2];
 
         // Covariances: start from PX4 and (optionally) inflate to reflect the synthetic drift
@@ -686,13 +711,9 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     double dist = std::sqrt(dx*dx + dy*dy);
 
     // End-of-path stop (optional): if near the last waypoint, stop.
-    const double end_dx = trajectory_.back()[0] - pose[0];
-    const double end_dy = trajectory_.back()[1] - pose[1];
-    const double dist_to_end = std::sqrt(end_dx*end_dx + end_dy*end_dy);
-
     // If we're very near the end of the path, trigger LAND (once)
 	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
-		return;
+			return;
 	}
 
     // ----- SAFE direction: use ex,ey if valid; else use path tangent -----
