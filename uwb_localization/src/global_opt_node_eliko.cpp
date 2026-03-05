@@ -28,12 +28,14 @@
 #include <vector>
 #include <sstream>
 #include <deque>
+#include <stdexcept>
 #include <Eigen/Dense>
 #include <algorithm>
 #include <random>
 
 #include <utility>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 
 #include "uwb_localization/utils.hpp"
@@ -148,6 +150,66 @@ public:
     }
 
 private:
+    bool loadSensorPositionsFromFlatParams(
+        const std::string &ids_param_name,
+        const std::string &positions_param_name,
+        std::unordered_map<std::string, Eigen::Vector3d> &output,
+        const std::string &sensor_label) {
+
+        std::vector<std::string> ids;
+        std::vector<double> flat_positions;
+        this->get_parameter(ids_param_name, ids);
+        this->get_parameter(positions_param_name, flat_positions);
+
+        if (ids.empty() && flat_positions.empty()) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "[Eliko global_opt node] Missing %s config: '%s' and '%s' are required.",
+                sensor_label.c_str(), ids_param_name.c_str(), positions_param_name.c_str());
+            return false;
+        }
+
+        if (ids.empty() || flat_positions.empty()) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "[Eliko global_opt node] Invalid %s config: '%s' and '%s' must both be set.",
+                sensor_label.c_str(), ids_param_name.c_str(), positions_param_name.c_str());
+            return false;
+        }
+
+        const size_t expected_size = ids.size() * 3;
+        if (flat_positions.size() != expected_size) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "[Eliko global_opt node] Invalid %s config: '%s' has %zu entries but expected %zu (3 values per id).",
+                sensor_label.c_str(), positions_param_name.c_str(), flat_positions.size(), expected_size);
+            return false;
+        }
+
+        for (size_t i = 0; i < ids.size(); ++i) {
+            if (ids[i].empty()) {
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "[Eliko global_opt node] Skipping empty %s id at index %zu.", sensor_label.c_str(), i);
+                continue;
+            }
+
+            output[ids[i]] = Eigen::Vector3d(
+                flat_positions[3 * i + 0],
+                flat_positions[3 * i + 1],
+                flat_positions[3 * i + 2]);
+        }
+
+        if (output.empty()) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "[Eliko global_opt node] No valid %s entries were loaded from '%s'/'%s'.",
+                sensor_label.c_str(), ids_param_name.c_str(), positions_param_name.c_str());
+            return false;
+        }
+
+        return true;
+    }
 
     void declareParams() {
 
@@ -185,20 +247,14 @@ private:
                         std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
 
         // Declare the anchors parameters.
-        this->declare_parameter<std::string>("anchors.a1.id", "0x0009D6");
-        this->declare_parameter<std::vector<double>>("anchors.a1.position", std::vector<double>{-0.32, 0.3, 0.875});
-        this->declare_parameter<std::string>("anchors.a2.id", "0x0009E5");
-        this->declare_parameter<std::vector<double>>("anchors.a2.position", std::vector<double>{0.32, -0.3, 0.875});
-        this->declare_parameter<std::string>("anchors.a3.id", "0x0016FA");
-        this->declare_parameter<std::vector<double>>("anchors.a3.position", std::vector<double>{0.32, 0.3, 0.33});
-        this->declare_parameter<std::string>("anchors.a4.id", "0x0016CF");
-        this->declare_parameter<std::vector<double>>("anchors.a4.position", std::vector<double>{-0.32, -0.3, 0.33});
+        this->declare_parameter<std::vector<std::string>>("anchors.ids", std::vector<std::string>{});
+        // Flattened xyz list: [x1,y1,z1,x2,y2,z2,...] aligned with anchors.ids
+        this->declare_parameter<std::vector<double>>("anchors.positions", std::vector<double>{});
 
         // Declare the tags parameters.
-        this->declare_parameter<std::string>("tags.t1.id", "0x001155");
-        this->declare_parameter<std::vector<double>>("tags.t1.position", std::vector<double>{-0.24, -0.24, -0.06});
-        this->declare_parameter<std::string>("tags.t2.id", "0x001397");
-        this->declare_parameter<std::vector<double>>("tags.t2.position", std::vector<double>{0.24, 0.24, -0.06});
+        this->declare_parameter<std::vector<std::string>>("tags.ids", std::vector<std::string>{});
+        // Flattened xyz list: [x1,y1,z1,x2,y2,z2,...] aligned with tags.ids
+        this->declare_parameter<std::vector<double>>("tags.positions", std::vector<double>{});
     }
 
     void getParams() {
@@ -261,44 +317,34 @@ private:
         RCLCPP_INFO(this->get_logger(), "UAV initial pose:\n");
         logTransformationMatrix(uav_init_pose_.matrix(), this->get_logger());
     
-        // Initialize anchors from parameters.
-        std::string a1_id, a2_id, a3_id, a4_id;
-        std::vector<double> a1_pos, a2_pos, a3_pos, a4_pos;
-        
-        {
-            // Anchor A1
-            this->get_parameter("anchors.a1.id", a1_id);
-            this->get_parameter("anchors.a1.position", a1_pos);
-            anchor_positions_[a1_id] = Eigen::Vector3d(a1_pos[0], a1_pos[1], a1_pos[2]);
-    
-            this->get_parameter("anchors.a2.id", a2_id);
-            this->get_parameter("anchors.a2.position", a2_pos);
-            anchor_positions_[a2_id] = Eigen::Vector3d(a2_pos[0], a2_pos[1], a2_pos[2]);
-    
-            this->get_parameter("anchors.a3.id", a3_id);
-            this->get_parameter("anchors.a3.position", a3_pos);
-            anchor_positions_[a3_id] = Eigen::Vector3d(a3_pos[0], a3_pos[1], a3_pos[2]);
-    
-            this->get_parameter("anchors.a4.id", a4_id);
-            this->get_parameter("anchors.a4.position", a4_pos);
-            anchor_positions_[a4_id] = Eigen::Vector3d(a4_pos[0], a4_pos[1], a4_pos[2]);
-    
+        anchor_positions_.clear();
+        tag_positions_.clear();
+
+        const bool loaded_anchors = loadSensorPositionsFromFlatParams(
+            "anchors.ids", "anchors.positions", anchor_positions_, "anchor");
+        const bool loaded_tags = loadSensorPositionsFromFlatParams(
+            "tags.ids", "tags.positions", tag_positions_, "tag");
+
+        if (!loaded_anchors || !loaded_tags) {
+            RCLCPP_FATAL(
+                this->get_logger(),
+                "[Eliko global_opt node] Invalid anchor/tag configuration. "
+                "Required params: anchors.ids, anchors.positions, tags.ids, tags.positions.");
+            throw std::runtime_error("Missing required dynamic anchor/tag parameters.");
         }
-    
-        // Initialize anchors from parameters.
-        std::string t1_id, t2_id;
-        std::vector<double> t1_pos, t2_pos;
-    
-        // Initialize tags from parameters.
-        {
-            this->get_parameter("tags.t1.id", t1_id);
-            this->get_parameter("tags.t1.position", t1_pos);
-            tag_positions_[t1_id] = Eigen::Vector3d(t1_pos[0], t1_pos[1], t1_pos[2]);
-    
-            this->get_parameter("tags.t2.id", t2_id);
-            this->get_parameter("tags.t2.position", t2_pos);
-            tag_positions_[t2_id] = Eigen::Vector3d(t2_pos[0], t2_pos[1], t2_pos[2]);
+
+        if (anchor_positions_.empty() || tag_positions_.empty()) {
+            RCLCPP_FATAL(
+                this->get_logger(),
+                "[Eliko global_opt node] Invalid configuration: loaded %zu anchors and %zu tags.",
+                anchor_positions_.size(), tag_positions_.size());
+            throw std::runtime_error("Failed to load anchor/tag layout.");
         }
+
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[Eliko global_opt node] Loaded %zu anchors and %zu tags.",
+            anchor_positions_.size(), tag_positions_.size());
 
  
         // Log anchors.
@@ -522,8 +568,17 @@ private:
             measurement.agv_cumulative_distance = agv_total_translation_;
 
             //Positions of tags and anchors according to odometry
-            measurement.tag_odom_pose = tag_positions_odom_[measurement.tag_id];
-            measurement.anchor_odom_pose = anchor_positions_odom_[measurement.anchor_id];
+            const auto tag_it = tag_positions_odom_.find(measurement.tag_id);
+            const auto anchor_it = anchor_positions_odom_.find(measurement.anchor_id);
+            if (tag_it == tag_positions_odom_.end() || anchor_it == anchor_positions_odom_.end()) {
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 2000,
+                    "[Eliko global_opt node] Ignoring measurement with unknown sensor IDs (tag='%s', anchor='%s').",
+                    measurement.tag_id.c_str(), measurement.anchor_id.c_str());
+                continue;
+            }
+            measurement.tag_odom_pose = tag_it->second;
+            measurement.anchor_odom_pose = anchor_it->second;
 
             global_measurements_.push_back(measurement);
         }
@@ -608,7 +663,7 @@ private:
 
         // Then, check if there are enough measurements remaining.
         if (global_measurements_.size() < min_measurements_) {
-            RCLCPP_WARN(this->get_logger(), "[Eliko global_opt node] Got %d range measurements: not enough data to run optimization.", global_measurements_.size());
+            RCLCPP_WARN(this->get_logger(), "[Eliko global_opt node] Got %zu range measurements: not enough data to run optimization.", global_measurements_.size());
             return;
         }
 

@@ -28,7 +28,6 @@ setup(
     maintainer_email='andresmarsil77@gmail.com',
     description='TODO: Package description',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'trajectory_simulator = uwb_simulator.trajectory_simulator:main',

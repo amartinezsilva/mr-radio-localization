@@ -17,28 +17,18 @@ eliko_global_opt_node:
     use_ransac: true # use ransac algorithm with the prior
     moving_average: true
     moving_average_max_samples: 10
-    agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y [-2.805, -1.951, 0.0, 0.0, 0.0, -0.102]
+    agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y
     uav_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #x y z r p y
     anchors:
-      a1:
-        id: "0x0009D6"
-        position: [-0.32, 0.3, 0.875] #[-0.32, 0.3, 0.875]
-      a2:
-        id: "0x0009E5"
-        position: [0.32, -0.3, 0.875] #[0.32, -0.3, 0.875]
-      a3:
-        id: "0x0016FA"
-        position: [0.32, 0.3, 0.33] #[0.32, 0.3, 0.33]
-      a4:
-        id: "0x0016CF"
-        position: [-0.32, -0.3, 0.33] # [-0.32, -0.3, 0.33]
+      # Dynamic layout: ids and positions are aligned by index.
+      # positions is flattened as [x1,y1,z1,x2,y2,z2,...]
+      ids: ["0x0009D6", "0x0009E5", "0x0016FA", "0x0016CF"]
+      positions: [-0.32, 0.3, 0.875, 0.32, -0.3, 0.875, 0.32, 0.3, 0.33, -0.32, -0.3, 0.33]
     tags:
-      t1: 
-        id: "0x001155"
-        position: [-0.24, -0.24, -0.06]  #[-0.24, -0.24, -0.06]
-      t2: 
-        id: "0x001397"
-        position: [0.24, 0.24, -0.06]  #[0.24, 0.24, -0.06]
+      # Dynamic layout: ids and positions are aligned by index.
+      # positions is flattened as [x1,y1,z1,x2,y2,z2,...]
+      ids: ["0x001155", "0x001397"]
+      positions: [-0.24, -0.24, -0.06, 0.24, 0.24, -0.06]
 
 pose_optimization_node:
   ros__parameters:

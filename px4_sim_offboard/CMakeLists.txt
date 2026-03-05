@@ -47,7 +47,7 @@ install(DIRECTORY config
 )
 
 install(
-  DIRECTORY trajectories_positions
+  DIRECTORY trajectories
   DESTINATION share/${PROJECT_NAME}
 )
 

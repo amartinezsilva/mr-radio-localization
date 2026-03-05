@@ -1,8 +1,114 @@
 #!/bin/bash
 
-PX4_DIR=~/PX4-Autopilot
-ROS_WS=~/radio_ws
-QGC_PATH=~/Desktop/QGroundControl-x86_64.AppImage
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ROS_WS="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
+ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
+LAUNCH_LOCALIZATION=0
+
+print_usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--localization]
+
+Options:
+  --localization  Launch uwb_localization as well as the simulator and record the extended topic set.
+  -h, --help           Show this help message.
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --localization)
+        LAUNCH_LOCALIZATION=1
+        ;;
+      -h|--help)
+        print_usage
+        exit 0
+        ;;
+      *)
+        echo "[ERROR] Unknown argument: $1" >&2
+        print_usage >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
+
+find_qgc() {
+  local candidate
+
+  if [[ -n "${QGC_PATH:-}" ]]; then
+    printf '%s\n' "$QGC_PATH"
+    return 0
+  fi
+
+  for candidate in "$HOME/Desktop"/QGroundControl*.AppImage "$HOME/Downloads"/QGroundControl*.AppImage; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "[ERROR] Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+require_directory() {
+  if [[ ! -d "$1" ]]; then
+    echo "[ERROR] Directory not found: $1" >&2
+    exit 1
+  fi
+}
+
+build_ros_shell_command() {
+  local ros_command="$1"
+  local wrapped
+
+  printf -v wrapped "%q -lc %q" "$ROS_SHELL" "source \"$ROS_SETUP_SCRIPT\" && $ros_command"
+  printf '%s' "$wrapped"
+}
+
+QGC_PATH="$(find_qgc || true)"
+parse_args "$@"
+
+if [[ -z "$QGC_PATH" ]]; then
+  echo "[ERROR] QGroundControl AppImage not found. Set QGC_PATH or place it in ~/Desktop or ~/Downloads." >&2
+  exit 1
+fi
+
+require_directory "$ROS_WS"
+require_directory "$PX4_DIR"
+require_command tmux
+require_command MicroXRCEAgent
+
+if [[ -f "$ROS_WS/install/setup.bash" ]]; then
+  ROS_SHELL="bash"
+  ROS_SETUP_SCRIPT="$ROS_WS/install/setup.bash"
+elif [[ -f "$ROS_WS/install/setup.zsh" ]]; then
+  ROS_SHELL="zsh"
+  ROS_SETUP_SCRIPT="$ROS_WS/install/setup.zsh"
+  require_command zsh
+else
+  echo "[ERROR] Could not find a ROS setup script under $ROS_WS/install." >&2
+  exit 1
+fi
+
+PX4_BIN="$PX4_DIR/build/px4_sitl_default/bin/px4"
+if [[ ! -x "$PX4_BIN" ]]; then
+  echo "[ERROR] PX4 SITL binary not found at $PX4_BIN. Build PX4 with 'make px4_sitl' first." >&2
+  exit 1
+fi
 
 # # # Robot base poses: [x, y, z, roll, pitch, yaw]
 # # agv_pose = [13.351, 27.385, 0.636, 0.001, 0.001, 3.079]
@@ -25,7 +131,7 @@ ROVER_ROLL=0
 ROVER_PITCH=0
 ROVER_YAW=0
 
-SESSION="sim_session"
+SESSION="${SESSION:-sim_session}"
 
 graceful_shutdown() {
   echo "[CLEANUP] Graceful shutdown…"
@@ -51,7 +157,7 @@ graceful_shutdown() {
 trap graceful_shutdown EXIT INT TERM
 
 # Kill any previous session
-tmux kill-session -t $SESSION 2>/dev/null
+tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # Start new tmux session
 tmux new-session -d -s $SESSION
@@ -66,17 +172,17 @@ tmux split-window -v -t $SESSION:0.2
 tmux select-layout -t $SESSION:0 tiled
 
 # Set up QGroundControl
-tmux send-keys -t $SESSION:0.0 "chmod +x $QGC_PATH && $QGC_PATH" C-m
+tmux send-keys -t $SESSION:0.0 "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
 # Set up Micro XRCE-DDS Agent
 tmux send-keys -t $SESSION:0.1 "MicroXRCEAgent udp4 -p 8888" C-m
 # UAV (gz_x500)
-tmux send-keys -t $SESSION:0.2 "sleep 2 && cd $PX4_DIR && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 ./build/px4_sitl_default/bin/px4 -i 1" C-m
+tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 \"$PX4_BIN\" -i 1" C-m
 # Rover (gz_r1_rover)
-tmux send-keys -t $SESSION:0.3 "sleep 4 && cd $PX4_DIR && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=default ./build/px4_sitl_default/bin/px4 -i 2" C-m
+tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=default \"$PX4_BIN\" -i 2" C-m
 
 # Wait for everything to launch and spawn and then launch the ROS 2 nodes
-tmux send-keys -t $SESSION:0.4 "sleep 25 && cd $ROS_WS && source install/setup.zsh && ros2 launch px4_sim_offboard offboard_launch.py" C-m
-tmux send-keys -t $SESSION:0.5 "sleep 27 && cd $ROS_WS && source install/setup.zsh && ros2 topic echo /eliko/Distances" C-m
+tmux send-keys -t $SESSION:0.4 "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && ros2 launch px4_sim_offboard offboard_launch.py")" C-m
+tmux send-keys -t $SESSION:0.5 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /eliko/Distances")" C-m
 
 #odometry window
 tmux new-window -t $SESSION:1 -n optimization
@@ -89,32 +195,17 @@ tmux split-window -v -t $SESSION:1.1    # Create pane 1.3 from 1.1
 tmux select-layout -t $SESSION:1 tiled
 
 # Echo each vehicles odometry topic
-tmux send-keys -t $SESSION:1.0 "sleep 27 && source $ROS_WS/install/setup.zsh && ros2 topic echo /agv/odom" C-m
-tmux send-keys -t $SESSION:1.1 "sleep 27 && source $ROS_WS/install/setup.zsh && ros2 topic echo /uav/odom" C-m
+tmux send-keys -t $SESSION:1.0 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /agv/odom")" C-m
+tmux send-keys -t $SESSION:1.1 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /uav/odom")" C-m
 
-# UWB localization launch (to simulate and optimize at the same time)
-tmux send-keys -t $SESSION:1.2 "sleep 30 && cd $ROS_WS && source install/setup.zsh && ros2 launch uwb_localization localization.launch.py" C-m
-
-#Record all ROS 2 topics (to simulate and optimize at the same tim)
-tmux send-keys -t $SESSION:1.3 "sleep 30 && cd $ROS_WS && source install/setup.zsh && ros2 bag record \
-  /uav/gt \
-  /agv/gt \
-  /uav/odom \
-  /agv/odom \
-  /eliko_optimization_node/optimized_T \
-  /pose_graph_node/uav_anchor \
-  /pose_graph_node/agv_anchor" C-m
-
-# #Record all ROS 2 topics (Post-processing version)
-# tmux send-keys -t $SESSION:1.3 "sleep 30 && cd $ROS_WS && source install/setup.zsh && ros2 bag record \
-#   /uav/gt \
-#   /agv/gt \
-#   /uav/odom \
-#   /agv/odom \
-#   /eliko/Distances " C-m
+if (( LAUNCH_LOCALIZATION )); then
+  tmux send-keys -t $SESSION:1.2 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 launch uwb_localization localization.launch.py")" C-m
+  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko_optimization_node/optimized_T /eliko_optimization_node/optimized_T_nopr /eliko_optimization_node/ransac_optimized_T /pose_graph_node/uav_anchor /pose_graph_node/agv_anchor")" C-m
+else
+  # Record the baseline ROS 2 topics for post-processing.
+  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko/Distances")" C-m
+fi
 
 
 # Attach
 tmux attach-session -t $SESSION
-
-

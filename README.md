@@ -41,17 +41,15 @@ Clone this repository along with the dependency packages to your ROS 2 workspace
 
 This repository contains two ROS2 packages:
 
-* ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes.
+* ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
-![](images/real_diagram.drawio.png)
-
-* ```uwb_simulator```: includes the odometry simulation node and the measurement simulation node.  The ```config``` folder in this package contains the parameter file for these two nodes.
-
-![](images/basic_sim_diagram_simulation.drawio.png)
 
 * ```uwb_gz_simulator```: includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL (see instructions below).  The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
 
-![](images/SITL_simulation.drawio.png)
+![](images/Combined_Diagram.drawio.png)
+
+* ```uwb_simulator```: includes a very basic odometry simulation node and a range measurement simulation node (no SITL, no radar) using generic odometry and a basic measurement model, meant for debugging purposes only.  The ```config``` folder in this package contains the parameter file for these two nodes.
+![](images/basic_sim_diagram_simulation.drawio.png)
 
 
 ## Launch files
@@ -77,6 +75,26 @@ ros2 launch uwb_localization localization_sim.launch.py
 This package includes an enhanced simulator for relative localization which is integrated with [PX4](https://docs.px4.io/main/en/simulation/) Software In The Loop, which supports multi-vehicle simulation with Gazebo and ROS 2. We provide the following simulation tools:
 
 * ```uwb_gz_simulation``` includes a ```models``` folder with modified versions the differential rover ```r1_rover``` and the ```x500``` UAV with UWB anchors and tags mounted onboard each respective platform, which act as drop-in replacements for the existing ones. Reference for the original models can be found [here](https://docs.px4.io/main/en/sim_gazebo_gz/vehicles.html). The folder ```uwb_gazebo_plugin``` contains a custom plugin that reports distances between each anchor and tag, which is meant to be included under the plugins directory of PX4-Autopilot. 
+
+  You can regenerate UWB anchor/tag counts and positions with:
+  ```
+  python3 uwb_gz_simulation/tools/configure_uwb_layout.py \
+    --layout uwb_gz_simulation/uwb_layout.example.json
+  ```
+  The layout JSON expects two arrays:
+  - `anchors`: `[[x,y,z], ...]` mounted on `r1_rover`
+  - `tags`: `[[x,y,z], ...]` mounted on `x500_base`
+  The ordering is positional and defines the sensor indices used everywhere else:
+  - `anchors[0] -> a1`, `anchors[1] -> a2`, ...
+  - `tags[0] -> t1`, `tags[1] -> t2`, ...
+  As a result, the generated Gazebo range topics follow the same numbering (for example, `a1t2` means the first anchor entry and the second tag entry in the layout JSON).
+  The ID arrays in `px4_sim_offboard/config/agv_offboard_params.yaml` must be kept in the same order:
+  - `anchors.ids[0]` is the serial number assigned to `a1`
+  - `tags.ids[0]` is the serial number assigned to `t1`
+  If you reorder the `anchors` or `tags` arrays in the layout JSON, reorder the corresponding `anchors.ids` / `tags.ids` arrays as well so the published IDs still match the intended physical sensor positions.
+  This also regenerates bridge configs for all `aItJ` topic pairs:
+  - `uwb_gz_simulation/uwb_bridge.yaml`
+  - `px4_sim_offboard/config/uwb_bridge.yaml` (used by `offboard_launch.py`)
 
 * ```px4_sim_offboard``` includes a set of nodes that interact with the simulator, allowing to obtain sensor readings and input commands to each of the vehicles. It includes a simple trajectory tracker for each of the robots. It also parses messages from ```px4_msgs``` format to standard ROS formats, for better integration with the optimizer. 
 
@@ -120,14 +138,26 @@ make px4_sitl
 
 11) Add this package and its dependencies to your workspace.
 
-12) Update ```simulator_launcher.sh``` with the paths to your ROS 2 workspace, your PX4-Autopilot installation folder and the location of the QGC executable. By default, the script assumes that PX4 and the ROS 2 ws are on the root folder, and QGC is in ```~/Desktop```. 
+12) The script ``simulator_launcher.sh`` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
+
+```
+export ROS_WS=/path/to/your_ws
+export PX4_DIR=/path/to/PX4-Autopilot
+export QGC_PATH=/path/to/QGroundControl.AppImage
+```
 
 13) Give permissions to the simulator script and execute it: 
 
 ```
-cd <ros2_ws>/mr-radio-localization
-sudo chmod +x simulator_launcher.sh
+cd <ros2_ws>/src/mr-radio-localization
+chmod +x simulator_launcher.sh
 ./simulator_launcher.sh
+```
+
+Due to the computational demands of the simulator, we recommend to record the robot trajectories to a bag file first, store it under ``uwb_localization/bags`` and then run ``localization.launch.py`` providing the name to the recorded bag. However, you can still run the relative localization at the same time by using this command:
+
+```
+./simulator_launcher.sh --with-localization
 ```
 
 Note that the simulator takes a while to load. After about 30 seconds, you should see the two robots start to move. 
@@ -153,14 +183,10 @@ sudo make install
 sudo apt-get install libtclap-dev
 ```
 
-* When using the SITL, if you have a common workspace with all dependencies listed in this repo, the first time you run ``colcon build`` it may fail due to CMake being unable to find ``px4_ros_com``. Please make sure you have first compiled and sourced the PX4 dependencies, then compile the rest of the packages:
+* Older revisions of this repository may fail on the first ``colcon build`` because ``px4_sim_offboard/package.xml`` did not declare ``px4_ros_com`` as a dependency. The current version already includes that dependency, so a normal workspace build should resolve the package order correctly. If you are using an older checkout, update the repository or add the missing dependency manually:
 
-```
-cd <your_ws>
-colcon build --packages-select px4_msgs px4_ros_com
-source install/setup.bash
-colcon build
-source install/setup.bash
+```xml
+<depend>px4_ros_com</depend>
 ```
 
 * In Ubuntu 24.04 LTS and ROS 2 Jazzy, there is a [previously reported issue](https://discuss.px4.io/t/dds-faild-to-connect-ros2-jazzy/47966/3) that prevents the MicroXRCE Agent from connecting to the PX4 topics. This is because, when building the Micro-XRCE-DDS Agent on Ubuntu 24.04 (ROS 2 Jazzy) as part of the SITL setup, there may be a conflict between the locally built libraries (FastDDS/FastCDR) and the ones provided by the ROS 2 Jazzy default installation (``opt/ros``). The more straightforward workaround would be to tell your shell to look at your local build folders before the ROS folders by placing your paths at the beginning of the ``LD_LIBRARY_PATH``. To do it, find exactly where your libraries are located (replace ``path`` with the directory where you have cloned Micro-XRCE-DDS-Agent).
@@ -181,7 +207,6 @@ Close the file and source it to apply the changes. After this, the agent should 
 
 # Acknowledgements
 
-This work was supported by the grants PICRAH 4.0 0 (PLEC2023-010353): funded by the Spanish Ministry of Science and Innovation and the Spanish Research Agency (MCIN/AEI/10.13039/501100011033); and COBUILD (PID2024-161069OB-C31), funded by the Spanish Ministry of
-Science, Innovation and Universities, the Spanish Research Agency (MICIU/AEI/10.13039/501100011033) and the European Regional Development Fund (FEDER, UE).
+This work was supported by the grants PICRAH 4.0 0 (PLEC2023-010353): funded by the Spanish Ministry of Science and Innovation and the Spanish Research Agency (MCIN/AEI/10.13039/501100011033); and INSERTION (PID2021-127648OB-C31), funded by “Agencia Estatal de Investigación – Ministerio de Ciencia, Innovación y Universidades” and the “European Union NextGenerationEU/PRTR”.
 
 ![](images/fondos_proyectos.png)
