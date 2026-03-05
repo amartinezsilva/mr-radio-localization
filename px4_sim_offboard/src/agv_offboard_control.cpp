@@ -157,6 +157,7 @@ private:
     // In class AGVOffboardControl private:
     int    last_heading_reset_counter_{-1};
     double heading_reset_accum_{0.0};   // accumulated delta_heading across resets
+    int    last_odom_reset_counter_{-1};
 
     // Odometry gating/zeroing
     bool map_aligned_{false};
@@ -319,12 +320,22 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
             return;
         }
 
-        // --- Convert PX4 NED -> ROS ENU pose ---
-        Eigen::Quaterniond q_ned(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
-        Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
-
-        Eigen::Vector3d pos_ned(msg->position[0], msg->position[1], msg->position[2]);
+        // PX4 reset deltas shift the estimator frame. Subtract the accumulated
+        // shift so this callback sees a continuous trajectory in startup coordinates.
+        Eigen::Vector3d pos_ned(
+            msg->position[0] - xy_reset_accum_.x(),
+            msg->position[1] - xy_reset_accum_.y(),
+            msg->position[2] - z_reset_accum_);
         Eigen::Vector3d pos_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
+
+        Eigen::Quaterniond q_ned_raw(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
+        const Eigen::Vector3d rpy_ned_raw = q_ned_raw.toRotationMatrix().eulerAngles(2, 1, 0);
+        const double yaw_ned_cont = wrapPi(rpy_ned_raw[0] - heading_reset_accum_);
+        Eigen::Quaterniond q_ned =
+            Eigen::AngleAxisd(yaw_ned_cont, Eigen::Vector3d::UnitZ()) *
+            Eigen::AngleAxisd(rpy_ned_raw[1], Eigen::Vector3d::UnitY()) *
+            Eigen::AngleAxisd(rpy_ned_raw[2], Eigen::Vector3d::UnitX());
+        Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
 
         // True ENU yaw from quaternion
         const Eigen::Vector3d rpy_true = q_enu.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX
@@ -332,63 +343,71 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
         const double pitch_true = rpy_true[1];
         const double roll_true  = rpy_true[2];
 
+        if (last_odom_reset_counter_ < 0) {
+            last_odom_reset_counter_ = msg->reset_counter;
+        } else if (msg->reset_counter != last_odom_reset_counter_) {
+            last_odom_reset_counter_ = msg->reset_counter;
+            last_pos_true_enu_ = pos_enu;
+            q_last_true_enu_ = q_enu;
+            last_yaw_true_ = yaw_true;
+            return;
+        }
+
         if (!have_prev_odom_) {
 
             last_pos_true_enu_ = pos_enu;
             q_last_true_enu_   = q_enu;
             last_yaw_true_     = yaw_true;
 
-            //  // Initialize noisy odometry to the true pose
-            pos_noisy_enu_ = pos_enu;
-            yaw_noisy_     = yaw_true;
+            // Zero-base odom from the first valid sample.
+            pos_noisy_enu_.setZero();
+            yaw_noisy_ = 0.0;
 
             have_prev_odom_ = true;
+        } else {
+            // 1) True world increment
+            Eigen::Vector3d dpos_true_enu = pos_enu - last_pos_true_enu_;
 
-            return;
+            // 2) Express it in last *true* body frame
+            Eigen::Matrix3d R_last_true_enu = q_last_true_enu_.toRotationMatrix();
+            Eigen::Vector3d dpos_true_body = R_last_true_enu.transpose() * dpos_true_enu;
+
+            // 3) Add body-frame noise / scale (your per-axis % is fine here)
+            Eigen::Vector3d sigma_body(
+                pos_scale_err_ * std::abs(dpos_true_body.x()),
+                pos_scale_err_ * std::abs(dpos_true_body.y()),
+                pos_scale_err_ * std::abs(dpos_true_body.z()));
+            Eigen::Vector3d dpos_noisy_body = dpos_true_body + Eigen::Vector3d(
+                sigma_body.x() * odom_noise_(rng_),
+                sigma_body.y() * odom_noise_(rng_),
+                sigma_body.z() * odom_noise_(rng_));
+
+            // Yaw increment (still Z-only if you want): 
+            double dyaw_true = wrapPi(yaw_true - last_yaw_true_);
+            double dyaw_noisy = dyaw_true + (yaw_scale_err_ * std::abs(dyaw_true)) * odom_noise_(rng_);
+
+            // 4) Update the *estimated* orientation first
+            yaw_noisy_ = wrapPi(yaw_noisy_ + dyaw_noisy);
+
+            // If you want yaw-only attitude, build R_est from yaw_noisy_ and (optionally) keep true roll/pitch:
+            Eigen::Matrix3d R_est_enu =
+                (Eigen::AngleAxisd(yaw_noisy_, Eigen::Vector3d::UnitZ()) *
+                Eigen::AngleAxisd(pitch_true, Eigen::Vector3d::UnitY()) *
+                Eigen::AngleAxisd(roll_true,  Eigen::Vector3d::UnitX())).toRotationMatrix();
+
+            // 5) Rotate the **noisy local** increment into world and integrate position
+            pos_noisy_enu_ += R_est_enu * dpos_noisy_body;
+            
+            // Save current true for next step
+            last_pos_true_enu_ = pos_enu;
+            q_last_true_enu_   = q_enu;
+            last_yaw_true_ = yaw_true;
         }
-
-        // 1) True world increment
-        Eigen::Vector3d dpos_true_enu = pos_enu - last_pos_true_enu_;
-
-        // 2) Express it in last *true* body frame
-        Eigen::Matrix3d R_last_true_enu = q_last_true_enu_.toRotationMatrix();
-        Eigen::Vector3d dpos_true_body = R_last_true_enu.transpose() * dpos_true_enu;
-
-        // 3) Add body-frame noise / scale (your per-axis % is fine here)
-        Eigen::Vector3d sigma_body(
-            pos_scale_err_ * std::abs(dpos_true_body.x()),
-            pos_scale_err_ * std::abs(dpos_true_body.y()),
-            pos_scale_err_ * std::abs(dpos_true_body.z()));
-        Eigen::Vector3d dpos_noisy_body = dpos_true_body + Eigen::Vector3d(
-            sigma_body.x() * odom_noise_(rng_),
-            sigma_body.y() * odom_noise_(rng_),
-            sigma_body.z() * odom_noise_(rng_));
-
-        // Yaw increment (still Z-only if you want): 
-        double dyaw_true = wrapPi(yaw_true - last_yaw_true_);
-        double dyaw_noisy = dyaw_true + (yaw_scale_err_ * std::abs(dyaw_true)) * odom_noise_(rng_);
-
-        // 4) Update the *estimated* orientation first
-        yaw_noisy_ = wrapPi(yaw_noisy_ + dyaw_noisy);
 
         Eigen::Quaterniond q_noisy_enu =
             Eigen::AngleAxisd(yaw_noisy_, Eigen::Vector3d::UnitZ()) *
             Eigen::AngleAxisd(pitch_true, Eigen::Vector3d::UnitY()) *
             Eigen::AngleAxisd(roll_true,  Eigen::Vector3d::UnitX());
-
-        // If you want yaw-only attitude, build R_est from yaw_noisy_ and (optionally) keep true roll/pitch:
-        Eigen::Matrix3d R_est_enu =
-            (Eigen::AngleAxisd(yaw_noisy_, Eigen::Vector3d::UnitZ()) *
-            Eigen::AngleAxisd(pitch_true, Eigen::Vector3d::UnitY()) *
-            Eigen::AngleAxisd(roll_true,  Eigen::Vector3d::UnitX())).toRotationMatrix();
-
-        // 5) Rotate the **noisy local** increment into world and integrate position
-        pos_noisy_enu_ += R_est_enu * dpos_noisy_body;
-        
-        // Save current true for next step
-        last_pos_true_enu_ = pos_enu;
-        q_last_true_enu_   = q_enu;
-        last_yaw_true_ = yaw_true;
 
         // --- Publish Odometry with DRIFTED pose ---
         nav_msgs::msg::Odometry odom_msg;
@@ -482,18 +501,11 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
                 last_z_reset_counter_ = msg->z_reset_counter;
             }
 
-            //  // Compose **continuous** local NED position
-            // Eigen::Vector3d pos_ned(
-            //     msg->x + xy_reset_accum_.x(),
-            //     msg->y + xy_reset_accum_.y(),
-            //     msg->z + z_reset_accum_
-            // );
-
-            // Compose **continuous** local NED position
+            // Keep ground-truth pose continuous by undoing estimator frame resets.
             Eigen::Vector3d pos_ned(
-					msg->x,
-					msg->y,
-					msg->z
+						msg->x - xy_reset_accum_.x(),
+						msg->y - xy_reset_accum_.y(),
+						msg->z - z_reset_accum_
             );
 
             Eigen::Vector3d pos_enu_local =
@@ -502,8 +514,9 @@ AGVOffboardControl::AGVOffboardControl() : Node("agv_offboard_control")
             // Now compose world/map pose
             Eigen::Vector3d pos_enu_world = origin_q_enu_ * pos_enu_local + origin_pos_enu_;
 
-            // convert to ENU, then compose with origin orientation.
-            Eigen::Quaterniond q_heading_ned(Eigen::AngleAxisd(wrapPi(msg->heading), Eigen::Vector3d::UnitZ()));
+            // Compensate heading resets in NED before converting to ENU.
+            const double heading_ned = wrapPi(msg->heading - heading_reset_accum_);
+            Eigen::Quaterniond q_heading_ned(Eigen::AngleAxisd(heading_ned, Eigen::Vector3d::UnitZ()));
             Eigen::Quaterniond q_heading_enu =
                 px4_ros_com::frame_transforms::px4_to_ros_orientation(q_heading_ned);
             Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_heading_enu;
