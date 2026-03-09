@@ -2,7 +2,7 @@
 
 #include <gz/sim/System.hh>
 #include <gz/transport/Node.hh>
-#include <gz/transport/Publisher.hh>  // Add this
+#include <gz/transport/Publisher.hh>
 #include <unordered_map>
 #include <random>
 #include <chrono>
@@ -35,15 +35,19 @@ private:
   std::string modelAnchorPrefix_ = "r1_rover";
 
   std::default_random_engine rng_;
-  std::normal_distribution<double> noise_dist_{0.0, 0.12};  // zero-mean gaussian noise 10cm stdev
-  // Randomness (you already have rng_ and noise_dist_)
-  std::bernoulli_distribution outlier_flag_{0.02}; // 2% outliers
-  std::exponential_distribution<double> outlier_bias_m_{1.0};
+  std::normal_distribution<double> noise_dist_{0.0, 0.12};
 
   std::unordered_map<std::string, double> pairBiasCm_;
   std::uniform_real_distribution<double> biasCmDist_{-27.0, 20.0};
 
-  // Probability of a measurement dropout (no publish)
-  std::bernoulli_distribution dropout_flag_{0.02}; // 0.5% chance to skip a measurement
+  std::bernoulli_distribution dropout_flag_{0.02};
+
+  // Configurable sensor model parameters (units: cm, unless noted).
+  double noiseMeanCm_{0.0};
+  double noiseStddevCm_{0.12};
+  double biasMinCm_{-27.0};
+  double biasMaxCm_{20.0};
+  double dropoutProbability_{0.02}; // [0, 1]
+  bool applyPairBias_{false};
 };
 }

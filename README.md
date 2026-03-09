@@ -125,7 +125,17 @@ This package includes an enhanced simulator for relative localization which is i
     8.2: Then, load the plugin by including this line in `/path/to/PX4-Autopilot/src/modules/simulation/gz_bridge/server.config`.
 
 ```xml
-<plugin entity_name="*" entity_type="world" filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem"/>
+<plugin entity_name="*" entity_type="world" filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem">
+  <!-- Optional UWB sensor model parameters (all distances are in cm) -->
+  <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
+  <gaussian_noise_stddev_cm>0.12</gaussian_noise_stddev_cm>
+  <dropout_probability>0.02</dropout_probability>
+
+  <!-- Persistent per anchor-tag bias; disabled by default -->
+  <apply_pair_bias>true</apply_pair_bias>
+  <bias_min_cm>-27.0</bias_min_cm>
+  <bias_max_cm>20.0</bias_max_cm>
+</plugin>
 ```
 
 9) Build the code after adding the plugin: 
