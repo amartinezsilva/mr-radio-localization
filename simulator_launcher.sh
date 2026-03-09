@@ -110,6 +110,8 @@ if [[ ! -x "$PX4_BIN" ]]; then
   exit 1
 fi
 
+GZ_WORLD=walls
+
 # # # Robot base poses: [x, y, z, roll, pitch, yaw]
 # # agv_pose = [13.351, 27.385, 0.636, 0.001, 0.001, 3.079]
 # # uav_pose = [15.938, 22.979, 0.903, 0.000, 0.000, 0.028]
@@ -176,9 +178,9 @@ tmux send-keys -t $SESSION:0.0 "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
 # Set up Micro XRCE-DDS Agent
 tmux send-keys -t $SESSION:0.1 "MicroXRCEAgent udp4 -p 8888" C-m
 # UAV (gz_x500)
-tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 \"$PX4_BIN\" -i 1" C-m
+tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i 1" C-m
 # Rover (gz_r1_rover)
-tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=default \"$PX4_BIN\" -i 2" C-m
+tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i 2" C-m
 
 # Wait for everything to launch and spawn and then launch the ROS 2 nodes
 tmux send-keys -t $SESSION:0.4 "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && ros2 launch px4_sim_offboard offboard_launch.py")" C-m

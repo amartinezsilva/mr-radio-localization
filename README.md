@@ -135,6 +135,10 @@ This package includes an enhanced simulator for relative localization which is i
   <apply_pair_bias>true</apply_pair_bias>
   <bias_min_cm>-27.0</bias_min_cm>
   <bias_max_cm>20.0</bias_max_cm>
+
+  <!-- NLOS gate: drop measurement if any obstacle blocks LOS -->
+  <enable_nlos_dropout>true</enable_nlos_dropout>
+  <nlos_endpoint_margin_m>0.02</nlos_endpoint_margin_m>
 </plugin>
 ```
 
