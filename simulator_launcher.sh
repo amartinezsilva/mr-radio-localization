@@ -7,6 +7,24 @@ DEFAULT_ROS_WS="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
+GZ_WORLD="${GZ_WORLD:-default}"
+
+# UAV initial pose parameters (x, y, z, roll, pitch, yaw)
+UAV_X="${UAV_X:-0.5}"
+UAV_Y="${UAV_Y:--0.5}"
+UAV_Z="${UAV_Z:-0.0}"
+UAV_ROLL="${UAV_ROLL:-0}"
+UAV_PITCH="${UAV_PITCH:-0}"
+UAV_YAW="${UAV_YAW:-0.524}"
+
+# Rover initial pose parameters (x, y, z, roll, pitch, yaw)
+ROVER_X="${ROVER_X:-0.0}"
+ROVER_Y="${ROVER_Y:-0.0}"
+ROVER_Z="${ROVER_Z:-0.0}"
+ROVER_ROLL="${ROVER_ROLL:-0}"
+ROVER_PITCH="${ROVER_PITCH:-0}"
+ROVER_YAW="${ROVER_YAW:-0}"
+
 LAUNCH_LOCALIZATION=0
 
 print_usage() {
@@ -15,6 +33,9 @@ Usage: $(basename "$0") [--localization]
 
 Options:
   --localization  Launch uwb_localization as well as the simulator and record the extended topic set.
+  (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: default)
+  (env) UAV_*     UAV initial pose fields: UAV_X, UAV_Y, UAV_Z, UAV_ROLL, UAV_PITCH, UAV_YAW
+  (env) ROVER_*   Rover initial pose fields: ROVER_X, ROVER_Y, ROVER_Z, ROVER_ROLL, ROVER_PITCH, ROVER_YAW
   -h, --help           Show this help message.
 EOF
 }
@@ -109,29 +130,6 @@ if [[ ! -x "$PX4_BIN" ]]; then
   echo "[ERROR] PX4 SITL binary not found at $PX4_BIN. Build PX4 with 'make px4_sitl' first." >&2
   exit 1
 fi
-
-GZ_WORLD=walls
-
-# # # Robot base poses: [x, y, z, roll, pitch, yaw]
-# # agv_pose = [13.351, 27.385, 0.636, 0.001, 0.001, 3.079]
-# # uav_pose = [15.938, 22.979, 0.903, 0.000, 0.000, 0.028]
-
-# UAV initial pose (x, y, z, roll, pitch, yaw)
-UAV_X=0.5
-UAV_Y=-0.5
-UAV_Z=0.0
-UAV_ROLL=0
-
-UAV_PITCH=0
-UAV_YAW=0.524
-
-# Rover initial pose (x, y, z, roll, pitch, yaw)
-ROVER_X=0.0
-ROVER_Y=0.0
-ROVER_Z=0.0
-ROVER_ROLL=0
-ROVER_PITCH=0
-ROVER_YAW=0
 
 SESSION="${SESSION:-sim_session}"
 
