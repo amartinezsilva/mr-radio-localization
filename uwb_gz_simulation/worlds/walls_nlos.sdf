@@ -104,14 +104,14 @@
         <collision name="collision">
           <geometry>
             <box>
-              <size>.5 8 10</size>
+              <size>.25 8 10</size>
             </box>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
             <box>
-              <size>.5 8 10</size>
+              <size>.25 8 10</size>
             </box>
           </geometry>
           <material>
@@ -134,14 +134,14 @@
         <collision name="collision">
           <geometry>
             <box>
-              <size>1.5 10 10</size>
+              <size>.75 10 10</size>
             </box>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
             <box>
-              <size>1.5 10 10</size>
+              <size>.75 10 10</size>
             </box>
           </geometry>
           <material>
@@ -154,18 +154,18 @@
 
       <!-- Top long segment -->
       <link name="top_segment">
-        <pose>7 32.25 5 0 0 0</pose>
+        <pose>6.75 32.4 5 0 0 0</pose>
         <collision name="collision">
           <geometry>
             <box>
-              <size>10 1.5 10</size>
+              <size>10 1.25 10</size>
             </box>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
             <box>
-              <size>10 1.5 10</size>
+              <size>10 1.25 10</size>
             </box>
           </geometry>
           <material>

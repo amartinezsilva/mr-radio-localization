@@ -319,22 +319,31 @@ def generate_bridge_yaml(layout: UwbLayout) -> str:
     lines.append("")
     lines.append("# UWB distance topic bridges (GZ_TO_ROS only)")
 
+    def append_bridge(topic: str) -> None:
+        lines.extend(
+            [
+                f'- ros_topic_name: "{topic}"',
+                f'  gz_topic_name: "{topic}"',
+                '  ros_type_name: "std_msgs/msg/Float64"',
+                '  gz_type_name: "gz.msgs.Double"',
+                "  subscriber_queue: 10",
+                "  publisher_queue: 10",
+                "  lazy: false",
+                "  direction: GZ_TO_ROS",
+                "",
+            ]
+        )
+
     for anchor_idx in range(1, len(layout.anchors) + 1):
         for tag_idx in range(1, len(layout.tags) + 1):
-            topic = f"/uwb_gz_simulator/distances/a{anchor_idx}t{tag_idx}"
-            lines.extend(
-                [
-                    f'- ros_topic_name: "{topic}"',
-                    f'  gz_topic_name: "{topic}"',
-                    '  ros_type_name: "std_msgs/msg/Float64"',
-                    '  gz_type_name: "gz.msgs.Double"',
-                    "  subscriber_queue: 10",
-                    "  publisher_queue: 10",
-                    "  lazy: false",
-                    "  direction: GZ_TO_ROS",
-                    "",
-                ]
-            )
+            append_bridge(f"/uwb_gz_simulator/distances/a{anchor_idx}t{tag_idx}")
+
+    lines.append("# UWB ground-truth distance topic bridges (GZ_TO_ROS only)")
+    lines.append("")
+
+    for anchor_idx in range(1, len(layout.anchors) + 1):
+        for tag_idx in range(1, len(layout.tags) + 1):
+            append_bridge(f"/uwb_gz_simulator/distances_ground_truth/a{anchor_idx}t{tag_idx}")
 
     while lines and lines[-1] == "":
         lines.pop()
