@@ -10,12 +10,12 @@ ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
 GZ_WORLD="${GZ_WORLD:-default}"
 
 # UAV initial pose parameters (x, y, z, roll, pitch, yaw)
-UAV_X="${UAV_X:-0.5}"
-UAV_Y="${UAV_Y:--0.5}"
+UAV_X="${UAV_X:-3.0}"
+UAV_Y="${UAV_Y:-0.0}"
 UAV_Z="${UAV_Z:-0.0}"
 UAV_ROLL="${UAV_ROLL:-0}"
 UAV_PITCH="${UAV_PITCH:-0}"
-UAV_YAW="${UAV_YAW:-0.524}"
+UAV_YAW="${UAV_YAW:-1.57079632679}"
 
 # Rover initial pose parameters (x, y, z, roll, pitch, yaw)
 ROVER_X="${ROVER_X:-0.0}"
@@ -23,7 +23,7 @@ ROVER_Y="${ROVER_Y:-0.0}"
 ROVER_Z="${ROVER_Z:-0.0}"
 ROVER_ROLL="${ROVER_ROLL:-0}"
 ROVER_PITCH="${ROVER_PITCH:-0}"
-ROVER_YAW="${ROVER_YAW:-0}"
+ROVER_YAW="${ROVER_YAW:-1.57079632679}"
 
 LAUNCH_LOCALIZATION=0
 
