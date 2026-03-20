@@ -151,9 +151,8 @@ This package includes an enhanced simulator for relative localization which is i
   <soft_nlos_max_thickness_m>0.50</soft_nlos_max_thickness_m>
   <blackout_thickness_m>1.0</blackout_thickness_m>
 
-  <!-- Thickness severity shaping. -->
-  <soft_nlos_max_severity>0.60</soft_nlos_max_severity>
-  <hard_nlos_min_severity>0.80</hard_nlos_min_severity>
+  <!-- Extra Hard-NLOS slope relative to Soft NLOS (0 = same slope, 1 = double slope). -->
+  <hard_nlos_gap_ratio>0.75</hard_nlos_gap_ratio>
 
   <!-- Dropout probability range. -->
   <min_dropout_probability>0.02</min_dropout_probability>
@@ -165,11 +164,9 @@ This package includes an enhanced simulator for relative localization which is i
   <los_stddev_start_distance_m>15.0</los_stddev_start_distance_m>
   <los_stddev_end_distance_m>75.0</los_stddev_end_distance_m>
 
-  <!-- NLOS severity weighting. -->
-  <nlos_dropout_distance_weight>1.0</nlos_dropout_distance_weight>
-  <nlos_dropout_thickness_weight>1.0</nlos_dropout_thickness_weight>
-  <nlos_stddev_distance_weight>1.0</nlos_stddev_distance_weight>
-  <nlos_stddev_thickness_weight>1.0</nlos_stddev_thickness_weight>
+  <!-- Extra NLOS thickness importance relative to the fixed distance baseline (0 = equal, 1 = twice as influential). -->
+  <nlos_dropout_thickness_extra_weight>0.5</nlos_dropout_thickness_extra_weight>
+  <nlos_stddev_thickness_extra_weight>0.5</nlos_stddev_thickness_extra_weight>
 </plugin>
 ```
 

@@ -35,9 +35,11 @@ public:
 
 private:
   /// \brief Maps effective blocked thickness to a normalized NLOS severity.
-  /// \details Returns a value in the range [0, 1]. LOS conditions map to 0,
-  /// blackout maps to 1, and Soft/Hard NLOS use different slopes according to
-  /// the configured severity-shaping parameters.
+  /// \details Returns a value in the range [0, 1]. LOS conditions map to 0 and
+  /// blackout maps to 1. Between those limits, severity is piecewise linear in
+  /// effective blocked thickness, and the configured hard-NLOS ratio controls
+  /// how much steeper the Hard-NLOS segment is relative to the Soft-NLOS
+  /// segment while keeping the curve continuous.
   /// \param[in] blockedThicknessM Effective blocked thickness in meters.
   /// \return Normalized thickness severity.
   double ThicknessSeverity(double blockedThicknessM) const;
@@ -52,8 +54,9 @@ private:
 
   /// \brief Computes the measurement-dropout probability for a pair.
   /// \details In LOS, dropout depends only on distance. In NLOS, dropout is
-  /// computed from a weighted combination of distance severity and thickness
-  /// severity, with complete blackout enforced beyond the configured limits.
+  /// computed from the distance severity baseline plus a configurable weighted
+  /// thickness severity term, with complete blackout enforced beyond the
+  /// configured limits.
   /// \param[in] distanceM Anchor-tag separation in meters.
   /// \param[in] blockedThicknessM Effective blocked thickness in meters.
   /// \return Dropout probability in the range [0, 1].
@@ -61,8 +64,8 @@ private:
 
   /// \brief Computes the standard deviation of the additive range noise.
   /// \details In LOS, the standard deviation grows with distance only. In NLOS,
-  /// it is computed from a weighted combination of distance severity and
-  /// thickness severity.
+  /// it is computed from the distance severity baseline plus a configurable
+  /// weighted thickness severity term.
   /// \param[in] distanceM Anchor-tag separation in meters.
   /// \param[in] blockedThicknessM Effective blocked thickness in meters.
   /// \return Noise standard deviation in centimeters.
@@ -103,9 +106,7 @@ private:
   double losMaxThicknessM_{0.10};
   double softNlosMaxThicknessM_{0.50};
   double blackoutThicknessM_{1.0};
-
-  double softNlosMaxSeverity_{0.60};
-  double hardNlosMinSeverity_{0.80};
+  double hardNlosGapRatio_{0.50};
 
   double minDropoutProbability_{0.02};
   double maxDropoutProbability_{0.90};
@@ -120,10 +121,9 @@ private:
   bool enableNlosDropout_{true};
   // Ignore intersections too close to endpoints to avoid self-hit artifacts.
   double nlosEndpointMarginM_{0.02};
-  // In NLOS, combine distance and thickness severities with these gains.
-  double nlosDropoutDistanceWeight_{1.0};
-  double nlosDropoutThicknessWeight_{1.0};
-  double nlosStddevDistanceWeight_{1.0};
-  double nlosStddevThicknessWeight_{1.0};
+  // In NLOS, thickness contributes at least as much as distance. These
+  // normalized extra-weight parameters add to the fixed baseline gain of 1.0.
+  double nlosDropoutThicknessExtraWeight_{0.50};
+  double nlosStddevThicknessExtraWeight_{0.50};
 };
 }
