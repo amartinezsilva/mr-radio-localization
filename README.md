@@ -122,23 +122,54 @@ This package includes an enhanced simulator for relative localization which is i
     add_subdirectory(uwb_gazebo_plugin)
     add_custom_target(px4_gz_plugins ALL DEPENDS OpticalFlowSystem MovingPlatformController TemplatePlugin GenericMotorModelPlugin BuoyancySystemPlugin SpacecraftThrusterModelPlugin UWBGazeboPlugin)
 ```
-    8.2: Then, load the plugin by including this line in `/path/to/PX4-Autopilot/src/modules/simulation/gz_bridge/server.config`.
+    8.2: Runtime plugin instance parameters are **not** set in CMake; they are set in `/path/to/PX4-Autopilot/src/modules/simulation/gz_bridge/server.config` when loading the plugin:
 
 ```xml
 <plugin entity_name="*" entity_type="world" filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem">
-  <!-- Optional UWB sensor model parameters (all distances are in cm) -->
-  <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
-  <gaussian_noise_stddev_cm>0.12</gaussian_noise_stddev_cm>
-  <dropout_probability>0.02</dropout_probability>
+  <topic>/uwb_gz_simulator/distances</topic>
+  <ground_truth_topic>/uwb_gz_simulator/distances_ground_truth</ground_truth_topic>
 
-  <!-- Persistent per anchor-tag bias; disabled by default -->
-  <apply_pair_bias>true</apply_pair_bias>
+  <!-- Additive measurement mean offset in cm. -->
+  <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
+
+  <!-- Optional persistent per anchor-tag bias in cm. -->
+  <apply_pair_bias>false</apply_pair_bias>
   <bias_min_cm>-27.0</bias_min_cm>
   <bias_max_cm>20.0</bias_max_cm>
 
-  <!-- NLOS gate: drop measurement if any obstacle blocks LOS -->
+  <!-- Enable NLOS-aware blockage checks and ignore tiny endpoint self-intersections. -->
   <enable_nlos_dropout>true</enable_nlos_dropout>
   <nlos_endpoint_margin_m>0.02</nlos_endpoint_margin_m>
+
+  <!-- LOS distance-based dropout model. -->
+  <los_dropout_start_distance_m>10.0</los_dropout_start_distance_m>
+  <los_dropout_end_distance_m>70.0</los_dropout_end_distance_m>
+  <los_hard_dropout_distance_m>75.0</los_hard_dropout_distance_m>
+
+  <!-- LOS thickness / NLOS regime boundaries. -->
+  <los_max_thickness_m>0.10</los_max_thickness_m>
+  <soft_nlos_max_thickness_m>0.50</soft_nlos_max_thickness_m>
+  <blackout_thickness_m>1.0</blackout_thickness_m>
+
+  <!-- Thickness severity shaping. -->
+  <soft_nlos_max_severity>0.60</soft_nlos_max_severity>
+  <hard_nlos_min_severity>0.80</hard_nlos_min_severity>
+
+  <!-- Dropout probability range. -->
+  <min_dropout_probability>0.02</min_dropout_probability>
+  <max_dropout_probability>0.90</max_dropout_probability>
+
+  <!-- Range noise standard deviation model in cm. -->
+  <min_noise_stddev_cm>12.0</min_noise_stddev_cm>
+  <max_noise_stddev_cm>50.0</max_noise_stddev_cm>
+  <los_stddev_start_distance_m>15.0</los_stddev_start_distance_m>
+  <los_stddev_end_distance_m>75.0</los_stddev_end_distance_m>
+
+  <!-- NLOS severity weighting. -->
+  <nlos_dropout_distance_weight>1.0</nlos_dropout_distance_weight>
+  <nlos_dropout_thickness_weight>1.0</nlos_dropout_thickness_weight>
+  <nlos_stddev_distance_weight>1.0</nlos_stddev_distance_weight>
+  <nlos_stddev_thickness_weight>1.0</nlos_stddev_thickness_weight>
 </plugin>
 ```
 

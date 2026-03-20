@@ -28,6 +28,266 @@ GZ_ADD_PLUGIN(UWBGazeboSystem,
               UWBGazeboSystem::ISystemConfigure,
               UWBGazeboSystem::ISystemPreUpdate)
 
+// Helper functions            
+namespace
+{
+  constexpr double kPositiveEpsilon = 1e-6;
+  constexpr double kOrderingEpsilon = 1e-6;
+
+  //
+  double exponentialRamp(const double _x,
+                        const double _xStart,
+                        const double _xEnd,
+                        const double _yStart,
+                        const double _yEnd)
+  {
+    if (_x <= _xStart)
+      return _yStart;
+
+    if (_x >= _xEnd)
+      return _yEnd;
+
+    const double growthRate = std::log(_yEnd / _yStart) / (_xEnd - _xStart);
+    const double value = _yStart * std::exp(growthRate * (_x - _xStart));
+    return std::clamp(value, std::min(_yStart, _yEnd), std::max(_yStart, _yEnd));
+  }
+
+  // Normalized linear mapping between a maximum and a minimum value, returns a value in range [0,1]
+  double normalizedRamp(const double _x,
+                        const double _xStart,
+                        const double _xEnd)
+  {
+    if (_x <= _xStart)
+      return 0.0;
+
+    if (_x >= _xEnd)
+      return 1.0;
+
+    return (_x - _xStart) / (_xEnd - _xStart);
+  }
+
+  // Create a topic name based on tag and anchor id pairId (.e.g. a1t2 for anchor 1 - tag2), and a common namespace
+  std::string makePairTopic(const std::string &_baseTopic, const std::string &_pairId)
+  {
+    if (_baseTopic.empty())
+      return "/" + _pairId;
+
+    if (_baseTopic.back() == '/')
+      return _baseTopic + _pairId;
+
+    return _baseTopic + "/" + _pairId;
+  }
+}  // namespace
+
+double UWBGazeboSystem::ThicknessSeverity(const double _blockedThicknessM) const
+{
+  if (_blockedThicknessM <= this->losMaxThicknessM_)
+    return 0.0;
+
+  if (_blockedThicknessM >= this->blackoutThicknessM_)
+    return 1.0;
+
+  if (_blockedThicknessM < this->softNlosMaxThicknessM_)
+  {
+    const double softProgress = normalizedRamp(_blockedThicknessM,
+                                               this->losMaxThicknessM_,
+                                               this->softNlosMaxThicknessM_);
+    return this->softNlosMaxSeverity_ * softProgress;
+  }
+
+  const double hardProgress = normalizedRamp(_blockedThicknessM,
+                                             this->softNlosMaxThicknessM_,
+                                             this->blackoutThicknessM_);
+  return this->hardNlosMinSeverity_ + ((1.0 - this->hardNlosMinSeverity_) * hardProgress);
+}
+
+double UWBGazeboSystem::ComputeBodyShadowEquivalentThicknessM(
+    const double _bodyBlockedThicknessM) const
+{
+  if (_bodyBlockedThicknessM <= this->losMaxThicknessM_)
+    return 0.0;
+
+  return std::min(_bodyBlockedThicknessM, this->softNlosMaxThicknessM_);
+}
+
+double UWBGazeboSystem::ComputeDropoutProbability(const double _distanceM,
+                                                  const double _blockedThicknessM) const
+{
+  const double losDropoutProbability = exponentialRamp(_distanceM,
+                                                       this->losDropoutStartDistanceM_,
+                                                       this->losDropoutEndDistanceM_,
+                                                       this->minDropoutProbability_,
+                                                       this->maxDropoutProbability_);
+
+  if (_distanceM > this->losHardDropoutDistanceM_)
+    return 1.0;
+
+  if (this->enableNlosDropout_ && _blockedThicknessM > this->losMaxThicknessM_)
+  {
+    if (_blockedThicknessM >= this->blackoutThicknessM_)
+      return 1.0;
+
+    const double distanceSeverity = normalizedRamp(_distanceM,
+                                                   this->losDropoutStartDistanceM_,
+                                                   this->losDropoutEndDistanceM_);
+    const double nlosThicknessSeverity = this->ThicknessSeverity(_blockedThicknessM);
+    const double combinedSeverity = std::clamp(
+        (this->nlosDropoutDistanceWeight_ * distanceSeverity) +
+            (this->nlosDropoutThicknessWeight_ * nlosThicknessSeverity),
+        0.0,
+        1.0);
+
+    return exponentialRamp(combinedSeverity,
+                           0.0,
+                           1.0,
+                           this->minDropoutProbability_,
+                           this->maxDropoutProbability_);
+  }
+
+  return losDropoutProbability;
+}
+
+double UWBGazeboSystem::ComputeNoiseStddevCm(const double _distanceM,
+                                             const double _blockedThicknessM) const
+{
+  const double distanceSeverity = normalizedRamp(_distanceM,
+                                                 this->losStddevStartDistanceM_,
+                                                 this->losStddevEndDistanceM_);
+
+  if (_blockedThicknessM > this->losMaxThicknessM_)
+  {
+    if (_blockedThicknessM >= this->blackoutThicknessM_)
+      return this->maxNoiseStddevCm_;
+
+    const double nlosThicknessSeverity = this->ThicknessSeverity(_blockedThicknessM);
+    const double combinedSeverity = std::clamp(
+        (this->nlosStddevDistanceWeight_ * distanceSeverity) +
+            (this->nlosStddevThicknessWeight_ * nlosThicknessSeverity),
+        0.0,
+        1.0);
+
+    return exponentialRamp(combinedSeverity,
+                           0.0,
+                           1.0,
+                           this->minNoiseStddevCm_,
+                           this->maxNoiseStddevCm_);
+  }
+
+  return exponentialRamp(distanceSeverity,
+                         0.0,
+                         1.0,
+                         this->minNoiseStddevCm_,
+                         this->maxNoiseStddevCm_);
+}
+
+void UWBGazeboSystem::ValidateAndNormalizeParameters()
+{
+  if (this->biasMinCm_ > this->biasMaxCm_)
+  {
+    gzwarn << "[UWBGazeboSystem] bias_min_cm > bias_max_cm. Swapping values.\n";
+    std::swap(this->biasMinCm_, this->biasMaxCm_);
+  }
+
+  if (this->nlosEndpointMarginM_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] nlos_endpoint_margin_m < 0.0. Clamping to 0.0.\n";
+    this->nlosEndpointMarginM_ = 0.0;
+  }
+
+  auto clampPositive = [](const double value) {
+    return std::max(value, kPositiveEpsilon);
+  };
+
+  this->minDropoutProbability_ = std::clamp(this->minDropoutProbability_,
+                                            kPositiveEpsilon,
+                                            1.0);
+  this->maxDropoutProbability_ = std::clamp(this->maxDropoutProbability_,
+                                            kPositiveEpsilon,
+                                            1.0);
+  if (this->minDropoutProbability_ > this->maxDropoutProbability_)
+  {
+    gzwarn << "[UWBGazeboSystem] min_dropout_probability > max_dropout_probability. Swapping values.\n";
+    std::swap(this->minDropoutProbability_, this->maxDropoutProbability_);
+  }
+
+  this->minNoiseStddevCm_ = clampPositive(this->minNoiseStddevCm_);
+  this->maxNoiseStddevCm_ = clampPositive(this->maxNoiseStddevCm_);
+  if (this->minNoiseStddevCm_ > this->maxNoiseStddevCm_)
+  {
+    gzwarn << "[UWBGazeboSystem] min_noise_stddev_cm > max_noise_stddev_cm. Swapping values.\n";
+    std::swap(this->minNoiseStddevCm_, this->maxNoiseStddevCm_);
+  }
+
+  if (this->losDropoutEndDistanceM_ < this->losDropoutStartDistanceM_)
+  {
+    gzwarn << "[UWBGazeboSystem] los_dropout_end_distance_m < los_dropout_start_distance_m. Swapping values.\n";
+    std::swap(this->losDropoutStartDistanceM_, this->losDropoutEndDistanceM_);
+  }
+
+  if (this->losStddevEndDistanceM_ < this->losStddevStartDistanceM_)
+  {
+    gzwarn << "[UWBGazeboSystem] los_stddev_end_distance_m < los_stddev_start_distance_m. Swapping values.\n";
+    std::swap(this->losStddevStartDistanceM_, this->losStddevEndDistanceM_);
+  }
+
+  if (this->losHardDropoutDistanceM_ < this->losDropoutEndDistanceM_)
+  {
+    gzwarn << "[UWBGazeboSystem] los_hard_dropout_distance_m < los_dropout_end_distance_m. Raising to los_dropout_end_distance_m.\n";
+    this->losHardDropoutDistanceM_ = this->losDropoutEndDistanceM_;
+  }
+
+  this->losMaxThicknessM_ = std::max(this->losMaxThicknessM_, 0.0);
+  this->softNlosMaxThicknessM_ =
+      std::max(this->softNlosMaxThicknessM_, this->losMaxThicknessM_ + kOrderingEpsilon);
+  this->blackoutThicknessM_ =
+      std::max(this->blackoutThicknessM_, this->softNlosMaxThicknessM_ + kOrderingEpsilon);
+
+  this->softNlosMaxSeverity_ = std::clamp(this->softNlosMaxSeverity_, 0.0, 1.0);
+  this->hardNlosMinSeverity_ = std::clamp(this->hardNlosMinSeverity_, 0.0, 1.0);
+  if (this->hardNlosMinSeverity_ < this->softNlosMaxSeverity_)
+  {
+    gzwarn << "[UWBGazeboSystem] hard_nlos_min_severity < soft_nlos_max_severity. Raising hard_nlos_min_severity.\n";
+    this->hardNlosMinSeverity_ = this->softNlosMaxSeverity_;
+  }
+
+  if (this->nlosDropoutDistanceWeight_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] nlos_dropout_distance_weight < 0.0. Clamping to 0.0.\n";
+    this->nlosDropoutDistanceWeight_ = 0.0;
+  }
+
+  if (this->nlosDropoutThicknessWeight_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] nlos_dropout_thickness_weight < 0.0. Clamping to 0.0.\n";
+    this->nlosDropoutThicknessWeight_ = 0.0;
+  }
+
+  if (this->nlosStddevDistanceWeight_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] nlos_stddev_distance_weight < 0.0. Clamping to 0.0.\n";
+    this->nlosStddevDistanceWeight_ = 0.0;
+  }
+
+  if (this->nlosStddevThicknessWeight_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] nlos_stddev_thickness_weight < 0.0. Clamping to 0.0.\n";
+    this->nlosStddevThicknessWeight_ = 0.0;
+  }
+
+  if (this->topic_.empty())
+  {
+    gzwarn << "[UWBGazeboSystem] topic is empty. Falling back to /uwb_gz_simulator/distances.\n";
+    this->topic_ = "/uwb_gz_simulator/distances";
+  }
+
+  if (this->groundTruthTopic_.empty())
+  {
+    gzwarn << "[UWBGazeboSystem] ground_truth_topic is empty. Falling back to "
+              "/uwb_gz_simulator/distances_ground_truth.\n";
+    this->groundTruthTopic_ = "/uwb_gz_simulator/distances_ground_truth";
+  }
+}
+
 void UWBGazeboSystem::Configure(const gz::sim::Entity &,
                                 const std::shared_ptr<const sdf::Element> &_sdf,
                                 gz::sim::EntityComponentManager &,
@@ -36,17 +296,11 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   if (_sdf && _sdf->HasElement("gaussian_noise_mean_cm"))
     this->noiseMeanCm_ = _sdf->Get<double>("gaussian_noise_mean_cm");
 
-  if (_sdf && _sdf->HasElement("gaussian_noise_stddev_cm"))
-    this->noiseStddevCm_ = _sdf->Get<double>("gaussian_noise_stddev_cm");
-
   if (_sdf && _sdf->HasElement("bias_min_cm"))
     this->biasMinCm_ = _sdf->Get<double>("bias_min_cm");
 
   if (_sdf && _sdf->HasElement("bias_max_cm"))
     this->biasMaxCm_ = _sdf->Get<double>("bias_max_cm");
-
-  if (_sdf && _sdf->HasElement("dropout_probability"))
-    this->dropoutProbability_ = _sdf->Get<double>("dropout_probability");
 
   if (_sdf && _sdf->HasElement("apply_pair_bias"))
     this->applyPairBias_ = _sdf->Get<bool>("apply_pair_bias");
@@ -57,48 +311,106 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   if (_sdf && _sdf->HasElement("nlos_endpoint_margin_m"))
     this->nlosEndpointMarginM_ = _sdf->Get<double>("nlos_endpoint_margin_m");
 
-  if (this->noiseStddevCm_ < 0.0)
+  if (_sdf && _sdf->HasElement("nlos_dropout_thickness_weight"))
   {
-    gzwarn << "[UWBGazeboSystem] gaussian_noise_stddev_cm < 0.0. Clamping to 0.0.\n";
-    this->noiseStddevCm_ = 0.0;
+    this->nlosDropoutThicknessWeight_ = _sdf->Get<double>("nlos_dropout_thickness_weight");
   }
 
-  if (this->biasMinCm_ > this->biasMaxCm_)
+  if (_sdf && _sdf->HasElement("nlos_stddev_thickness_weight"))
   {
-    gzwarn << "[UWBGazeboSystem] bias_min_cm > bias_max_cm. Swapping values.\n";
-    std::swap(this->biasMinCm_, this->biasMaxCm_);
+    this->nlosStddevThicknessWeight_ = _sdf->Get<double>("nlos_stddev_thickness_weight");
   }
 
-  const bool dropoutWasOutOfRange =
-      (this->dropoutProbability_ < 0.0) || (this->dropoutProbability_ > 1.0);
-  this->dropoutProbability_ = std::clamp(this->dropoutProbability_, 0.0, 1.0);
-  if (dropoutWasOutOfRange)
-  {
-    gzwarn << "[UWBGazeboSystem] dropout_probability out of [0,1]. Clamped to "
-           << this->dropoutProbability_ << ".\n";
-  }
+  if (_sdf && _sdf->HasElement("los_dropout_start_distance_m"))
+    this->losDropoutStartDistanceM_ = _sdf->Get<double>("los_dropout_start_distance_m");
 
-  if (this->nlosEndpointMarginM_ < 0.0)
-  {
-    gzwarn << "[UWBGazeboSystem] nlos_endpoint_margin_m < 0.0. Clamping to 0.0.\n";
-    this->nlosEndpointMarginM_ = 0.0;
-  }
+  if (_sdf && _sdf->HasElement("los_dropout_end_distance_m"))
+    this->losDropoutEndDistanceM_ = _sdf->Get<double>("los_dropout_end_distance_m");
 
-  this->noise_dist_ =
-      std::normal_distribution<double>(this->noiseMeanCm_, this->noiseStddevCm_);
+  if (_sdf && _sdf->HasElement("los_hard_dropout_distance_m"))
+    this->losHardDropoutDistanceM_ = _sdf->Get<double>("los_hard_dropout_distance_m");
+
+  if (_sdf && _sdf->HasElement("los_max_thickness_m"))
+    this->losMaxThicknessM_ = _sdf->Get<double>("los_max_thickness_m");
+
+  if (_sdf && _sdf->HasElement("soft_nlos_max_thickness_m"))
+    this->softNlosMaxThicknessM_ = _sdf->Get<double>("soft_nlos_max_thickness_m");
+
+  if (_sdf && _sdf->HasElement("blackout_thickness_m"))
+    this->blackoutThicknessM_ = _sdf->Get<double>("blackout_thickness_m");
+
+  if (_sdf && _sdf->HasElement("soft_nlos_max_severity"))
+    this->softNlosMaxSeverity_ = _sdf->Get<double>("soft_nlos_max_severity");
+
+  if (_sdf && _sdf->HasElement("hard_nlos_min_severity"))
+    this->hardNlosMinSeverity_ = _sdf->Get<double>("hard_nlos_min_severity");
+
+  if (_sdf && _sdf->HasElement("min_dropout_probability"))
+    this->minDropoutProbability_ = _sdf->Get<double>("min_dropout_probability");
+
+  if (_sdf && _sdf->HasElement("max_dropout_probability"))
+    this->maxDropoutProbability_ = _sdf->Get<double>("max_dropout_probability");
+
+  if (_sdf && _sdf->HasElement("min_noise_stddev_cm"))
+    this->minNoiseStddevCm_ = _sdf->Get<double>("min_noise_stddev_cm");
+
+  if (_sdf && _sdf->HasElement("max_noise_stddev_cm"))
+    this->maxNoiseStddevCm_ = _sdf->Get<double>("max_noise_stddev_cm");
+
+  if (_sdf && _sdf->HasElement("los_stddev_start_distance_m"))
+    this->losStddevStartDistanceM_ = _sdf->Get<double>("los_stddev_start_distance_m");
+
+  if (_sdf && _sdf->HasElement("los_stddev_end_distance_m"))
+    this->losStddevEndDistanceM_ = _sdf->Get<double>("los_stddev_end_distance_m");
+
+  if (_sdf && _sdf->HasElement("nlos_dropout_distance_weight"))
+    this->nlosDropoutDistanceWeight_ = _sdf->Get<double>("nlos_dropout_distance_weight");
+
+  if (_sdf && _sdf->HasElement("nlos_stddev_distance_weight"))
+    this->nlosStddevDistanceWeight_ = _sdf->Get<double>("nlos_stddev_distance_weight");
+
+  if (_sdf && _sdf->HasElement("topic"))
+    this->topic_ = _sdf->Get<std::string>("topic");
+
+  if (_sdf && _sdf->HasElement("ground_truth_topic"))
+    this->groundTruthTopic_ = _sdf->Get<std::string>("ground_truth_topic");
+
+  this->ValidateAndNormalizeParameters();
+
   this->biasCmDist_ =
       std::uniform_real_distribution<double>(this->biasMinCm_, this->biasMaxCm_);
-  this->dropout_flag_ = std::bernoulli_distribution(this->dropoutProbability_);
   this->pairBiasCm_.clear();
+  this->publishers_.clear();
+  this->groundTruthPublishers_.clear();
 
   gzmsg << "[UWBGazeboSystem] Sensor model: gaussian_mean_cm=" << this->noiseMeanCm_
-        << ", gaussian_stddev_cm=" << this->noiseStddevCm_
+        << ", dropout_probability_range=[" << this->minDropoutProbability_ << ", "
+        << this->maxDropoutProbability_ << "]"
+        << ", dynamic_stddev_cm=[" << this->minNoiseStddevCm_ << ", "
+        << this->maxNoiseStddevCm_ << "]"
+        << ", los_dropout_range_m=[" << this->losDropoutStartDistanceM_ << ", "
+        << this->losDropoutEndDistanceM_ << "]"
+        << ", los_hard_dropout_distance_m=" << this->losHardDropoutDistanceM_
+        << ", los_stddev_range_m=[" << this->losStddevStartDistanceM_ << ", "
+        << this->losStddevEndDistanceM_ << "]"
+        << ", thickness_regimes_m={los<=" << this->losMaxThicknessM_
+        << ", soft<=" << this->softNlosMaxThicknessM_
+        << ", hard<" << this->blackoutThicknessM_
+        << ", blackout>=" << this->blackoutThicknessM_ << "}"
+        << ", thickness_severity={soft_max=" << this->softNlosMaxSeverity_
+        << ", hard_min=" << this->hardNlosMinSeverity_ << "}"
+        << ", body_shadow_equivalent_thickness_m=min(body_blocked_thickness, soft_nlos_max_thickness_m)"
         << ", bias_min_cm=" << this->biasMinCm_
         << ", bias_max_cm=" << this->biasMaxCm_
         << ", apply_pair_bias=" << std::boolalpha << this->applyPairBias_
         << ", enable_nlos_dropout=" << std::boolalpha << this->enableNlosDropout_
         << ", nlos_endpoint_margin_m=" << this->nlosEndpointMarginM_
-        << ", dropout_probability=" << this->dropoutProbability_ << "\n";
+        << ", nlos_dropout_weights={distance=" << this->nlosDropoutDistanceWeight_
+        << ", thickness=" << this->nlosDropoutThicknessWeight_ << "}"
+        << ", nlos_stddev_weights={distance=" << this->nlosStddevDistanceWeight_
+        << ", thickness=" << this->nlosStddevThicknessWeight_ << "}"
+        << ", topic=" << this->topic_
+        << ", ground_truth_topic=" << this->groundTruthTopic_ << "\n";
 }
 
 gz::math::Pose3d computeWorldPose(const gz::sim::Entity &entity,
@@ -250,7 +562,8 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 
 	std::vector<std::pair<std::string, gz::sim::Entity>> tags;
 	std::vector<std::pair<std::string, gz::sim::Entity>> anchors;
-	std::vector<gz::sim::Entity> allLinks;
+	std::vector<gz::sim::Entity> obstacleLinks;
+	std::vector<gz::sim::Entity> bodyShadowLinks;
 
 	// Find all tag and anchor links
 	ecm.Each<gz::sim::components::Name, gz::sim::components::Link>(
@@ -266,7 +579,6 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 
 		const std::string &modelName = parentNameComp->Data();
 		const std::string &linkBaseName = linkName->Data();
-		allLinks.emplace_back(linkEntity);
 
 		// Check for uwb_tag_* in x500_* models
 		if (modelName.rfind(modelTagPrefix_, 0) == 0 && linkBaseName.rfind(tagPrefix_, 0) == 0)
@@ -276,11 +588,30 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		if (modelName.rfind(modelAnchorPrefix_, 0) == 0 && linkBaseName.rfind(anchorPrefix_, 0) == 0)
 		anchors.emplace_back(linkBaseName, linkEntity);
 
+		// For wall-induced NLOS, consider only static map obstacles.
+		const bool isTagModel = (modelName.rfind(modelTagPrefix_, 0) == 0);
+		const bool isAnchorModel = (modelName.rfind(modelAnchorPrefix_, 0) == 0);
+		const bool isGroundPlane = (modelName == "ground_plane");
+		if (!isTagModel && !isAnchorModel && !isGroundPlane)
+		{
+			obstacleLinks.emplace_back(linkEntity);
+		}
+
+		// Add a lightweight body-shadow penalty from the main vehicle bodies only.
+		if ((isTagModel || isAnchorModel) && linkBaseName == "base_link")
+		{
+			bodyShadowLinks.emplace_back(linkEntity);
+		}
+
 		return true;
 	});
 
 	// Ensure world AABB is available for LOS/NLOS checks.
-	for (const auto &linkEntity : allLinks)
+	for (const auto &linkEntity : obstacleLinks)
+	{
+		gz::sim::Link(linkEntity).EnableBoundingBoxChecks(ecm, true);
+	}
+	for (const auto &linkEntity : bodyShadowLinks)
 	{
 		gz::sim::Link(linkEntity).EnableBoundingBoxChecks(ecm, true);
 	}
@@ -290,7 +621,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	{
 		auto tagPose = computeWorldPose(tagEntity, ecm);
 
-    //NLOS check. Skip measurements if there is an obstacle between tag and anchor.
+    // Compute per-pair dropout from LOS distance or NLOS blocked thickness.
 		for (const auto &[anchorName, anchorEntity] : anchors)
 		{
 			auto anchorPose = computeWorldPose(anchorEntity, ecm);
@@ -298,33 +629,67 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			std::string anchorId = anchorName.substr(anchorName.find_last_of('_') + 1);
 			std::string pairId = "a" + anchorId + "t" + tagId;
 
-			const double blockedThicknessM =
+			const double wallBlockedThicknessM =
 				computeAabbBlockedThicknessM(tagPose.Pos(),
 											 anchorPose.Pos(),
-											 allLinks,
+											 obstacleLinks,
 											 tagEntity,
 											 anchorEntity,
 											 this->nlosEndpointMarginM_,
 											 ecm);
+			const double bodyShadowBlockedThicknessM =
+				computeAabbBlockedThicknessM(tagPose.Pos(),
+											 anchorPose.Pos(),
+											 bodyShadowLinks,
+											 tagEntity,
+											 anchorEntity,
+											 this->nlosEndpointMarginM_,
+											 ecm);
+			const double effectiveBlockedThicknessM =
+				wallBlockedThicknessM +
+				this->ComputeBodyShadowEquivalentThicknessM(bodyShadowBlockedThicknessM);
 
-			if (blockedThicknessM > 0.0)
+			const double distanceM = tagPose.Pos().Distance(anchorPose.Pos());
+			const double groundTruthDistCm = distanceM * 100.0;
+			const double dropoutProbability =
+				this->ComputeDropoutProbability(distanceM, effectiveBlockedThicknessM);
+			const double noiseStddevCm =
+				this->ComputeNoiseStddevCm(distanceM, effectiveBlockedThicknessM);
+
+			if (wallBlockedThicknessM > 0.0 || bodyShadowBlockedThicknessM > 0.0)
 			{
-				gzmsg << "[UWBGazeboSystem] AABB blocked_thickness_m=" << blockedThicknessM
+				gzmsg << "[UWBGazeboSystem] wall_blocked_thickness_m=" << wallBlockedThicknessM
+				      << ", body_shadow_blocked_thickness_m=" << bodyShadowBlockedThicknessM
+				      << ", effective_blocked_thickness_m=" << effectiveBlockedThicknessM
 				      << " pair=" << pairId << "\n";
 			}
 
-			if (this->enableNlosDropout_ && blockedThicknessM > 0.0)
+			const std::string groundTruthTopic = makePairTopic(this->groundTruthTopic_, pairId);
+			if (this->groundTruthPublishers_.find(groundTruthTopic) == this->groundTruthPublishers_.end())
+			{
+				this->groundTruthPublishers_[groundTruthTopic] =
+					this->node_.Advertise<gz::msgs::Double>(groundTruthTopic);
+			}
+
+			gz::msgs::Double groundTruthMsg;
+			groundTruthMsg.set_data(groundTruthDistCm);
+			this->groundTruthPublishers_[groundTruthTopic].Publish(groundTruthMsg);
+
+			if (std::bernoulli_distribution(dropoutProbability)(this->rng_))
 			{
 				continue;
 			}
 
-			//With a small probability, skip publishing
-			if (dropout_flag_(rng_)) {
-				continue;
+			const bool isNlos = (effectiveBlockedThicknessM > this->losMaxThicknessM_);
+			double noiseCm =
+				std::normal_distribution<double>(this->noiseMeanCm_, noiseStddevCm)(this->rng_);
+			if (isNlos && noiseCm < 0.0)
+			{
+				noiseCm = -noiseCm;
 			}
 
-			double dist = tagPose.Pos().Distance(anchorPose.Pos()) * 100.0; // Convert to cm
-			dist += noise_dist_(rng_);  // Add zero-mean Gaussian noise
+			double dist = groundTruthDistCm;
+			dist += noiseCm;
 
 			// Build stable key per anchor–tag pair
 			const std::string key = "a" + anchorName + "t" + tagName;
@@ -343,7 +708,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			// Keep distance physically valid
 			if (dist < 0.0) dist = 0.0;
 
-			std::string topic = "/uwb_gz_simulator/distances/" + pairId;
+			const std::string topic = makePairTopic(this->topic_, pairId);
 
 			// Create publisher if not already existing
 			if (this->publishers_.find(topic) == this->publishers_.end())
