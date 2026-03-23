@@ -53,7 +53,7 @@ This repository contains two ROS2 packages:
 * ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
 
-* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL. Detailed setup, plugin parameters, and usage instructions are documented in [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md). The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
+* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL. Detailed setup, plugin parameters, and usage instructions are documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
 
 ![](images/Combined_Diagram.drawio.png)
 
@@ -83,7 +83,7 @@ ros2 launch uwb_localization localization_sim.launch.py
 
 This package includes an enhanced simulator for relative localization which is integrated with [PX4](https://docs.px4.io/main/en/simulation/) Software In The Loop, which supports multi-vehicle simulation with Gazebo and ROS 2. We provide the following simulation tools:
 
-* ```UWBPX4Sim``` contains the modified Gazebo models, world files, bridge configuration, layout-generation tools, and the custom UWB Gazebo plugin used by the SITL setup. For the plugin-specific files, parameter description, layout regeneration, and PX4 integration steps, please refer to [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md).
+* ```UWBPX4Sim``` contains the modified Gazebo models, world files, bridge configuration, layout-generation tools, and the custom UWB Gazebo plugin used by the SITL setup. For the plugin-specific files, parameter description, layout regeneration, and PX4 integration steps, please refer to [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
 
 * ```px4_sim_offboard``` includes a set of nodes that interact with the simulator, allowing to obtain sensor readings and input commands to each of the vehicles. It includes a simple trajectory tracker for each of the robots. It also parses messages from ```px4_msgs``` format to standard ROS formats, for better integration with the optimizer. 
 
@@ -101,7 +101,7 @@ This package includes an enhanced simulator for relative localization which is i
 
 6) Build and source ROS2 [Workspace](https://docs.px4.io/main/en/ros2/user_guide.html#build-ros-2-workspace). To check that everything is working, we strongly encourage to also test the [multi-vehicle](https://docs.px4.io/main/en/sim_gazebo_gz/multi_vehicle_simulation.html) simulation example with ROS2 and Gazebo.
 
-7) Follow the PX4 integration instructions in [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md) to copy the Gazebo models and plugin into PX4-Autopilot, configure the runtime plugin instance in ```server.config```, and build ```px4_sitl```.
+7) Follow the PX4 integration instructions in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) to copy the Gazebo models and plugin into PX4-Autopilot, configure the runtime plugin instance in ```server.config```, and build ```px4_sitl```.
 
 8) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) 
 
