@@ -25,6 +25,9 @@
 #include "uwb_localization/CostFunctions.hpp"
 #include "uwb_localization/manifolds.hpp"
 
+#include <visualization_msgs/msg/marker_array.hpp>
+
+
 namespace uwb_localization {
 
 /**
@@ -197,6 +200,10 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr anchor_uav_publisher_;
   rclcpp::Publisher<PoseWithCovArray>::SharedPtr poses_uav_publisher_;
   rclcpp::Publisher<PoseWithCovArray>::SharedPtr poses_agv_publisher_;
+  
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr agv_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr uav_marker_pub_;
+
 
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Client<UpdatePointClouds>::SharedPtr pcl_visualizer_client_;

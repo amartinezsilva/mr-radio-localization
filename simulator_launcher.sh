@@ -7,14 +7,37 @@ DEFAULT_ROS_WS="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
+GZ_WORLD="${GZ_WORLD:-default}"
+
+# UAV initial pose parameters (x, y, z, roll, pitch, yaw)
+UAV_X="${UAV_X:-3.0}"
+UAV_Y="${UAV_Y:-0.0}"
+UAV_Z="${UAV_Z:-0.0}"
+UAV_ROLL="${UAV_ROLL:-0}"
+UAV_PITCH="${UAV_PITCH:-0}"
+UAV_YAW="${UAV_YAW:-1.57079632679}"
+
+# Rover initial pose parameters (x, y, z, roll, pitch, yaw)
+ROVER_X="${ROVER_X:-0.0}"
+ROVER_Y="${ROVER_Y:-0.0}"
+ROVER_Z="${ROVER_Z:-0.0}"
+ROVER_ROLL="${ROVER_ROLL:-0}"
+ROVER_PITCH="${ROVER_PITCH:-0}"
+ROVER_YAW="${ROVER_YAW:-1.57079632679}"
+
 LAUNCH_LOCALIZATION=0
+RECORD_BAG=0
 
 print_usage() {
   cat <<EOF
-Usage: $(basename "$0") [--localization]
+Usage: $(basename "$0") [--localization] [--bag]
 
 Options:
-  --localization  Launch uwb_localization as well as the simulator and record the extended topic set.
+  --localization  Launch uwb_localization together with the simulator.
+  --bag           Start ros2 bag recording in tmux pane 1.3.
+  (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: default)
+  (env) UAV_*     UAV initial pose fields: UAV_X, UAV_Y, UAV_Z, UAV_ROLL, UAV_PITCH, UAV_YAW
+  (env) ROVER_*   Rover initial pose fields: ROVER_X, ROVER_Y, ROVER_Z, ROVER_ROLL, ROVER_PITCH, ROVER_YAW
   -h, --help           Show this help message.
 EOF
 }
@@ -24,6 +47,9 @@ parse_args() {
     case "$1" in
       --localization)
         LAUNCH_LOCALIZATION=1
+        ;;
+      --bag)
+        RECORD_BAG=1
         ;;
       -h|--help)
         print_usage
@@ -110,28 +136,18 @@ if [[ ! -x "$PX4_BIN" ]]; then
   exit 1
 fi
 
-# # # Robot base poses: [x, y, z, roll, pitch, yaw]
-# # agv_pose = [13.351, 27.385, 0.636, 0.001, 0.001, 3.079]
-# # uav_pose = [15.938, 22.979, 0.903, 0.000, 0.000, 0.028]
-
-# UAV initial pose (x, y, z, roll, pitch, yaw)
-UAV_X=0.5
-UAV_Y=-0.5
-UAV_Z=0.0
-UAV_ROLL=0
-
-UAV_PITCH=0
-UAV_YAW=0.524
-
-# Rover initial pose (x, y, z, roll, pitch, yaw)
-ROVER_X=0.0
-ROVER_Y=0.0
-ROVER_Z=0.0
-ROVER_ROLL=0
-ROVER_PITCH=0
-ROVER_YAW=0
-
 SESSION="${SESSION:-sim_session}"
+UWB_BRIDGE_CONFIG="${UWB_BRIDGE_CONFIG:-$SCRIPT_DIR/px4_sim_offboard/config/uwb_bridge.yaml}"
+
+# Build UWB pair topic list directly from the bridge config.
+UWB_PAIR_TOPICS=()
+if [[ -f "$UWB_BRIDGE_CONFIG" ]]; then
+  mapfile -t UWB_PAIR_TOPICS < <(
+    awk -F'"' '/ros_topic_name:/ {print $2}' "$UWB_BRIDGE_CONFIG"
+  )
+else
+  echo "[WARN] UWB bridge config not found at $UWB_BRIDGE_CONFIG. Falling back to /eliko/Distances only." >&2
+fi
 
 graceful_shutdown() {
   echo "[CLEANUP] Graceful shutdown…"
@@ -176,9 +192,9 @@ tmux send-keys -t $SESSION:0.0 "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
 # Set up Micro XRCE-DDS Agent
 tmux send-keys -t $SESSION:0.1 "MicroXRCEAgent udp4 -p 8888" C-m
 # UAV (gz_x500)
-tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 \"$PX4_BIN\" -i 1" C-m
+tmux send-keys -t $SESSION:0.2 "sleep 2 && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='${UAV_X},${UAV_Y},${UAV_Z},${UAV_ROLL},${UAV_PITCH},${UAV_YAW}' PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i 1" C-m
 # Rover (gz_r1_rover)
-tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=default \"$PX4_BIN\" -i 2" C-m
+tmux send-keys -t $SESSION:0.3 "sleep 4 && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='${ROVER_X},${ROVER_Y},${ROVER_Z},${ROVER_ROLL},${ROVER_PITCH},${ROVER_YAW}' PX4_SYS_AUTOSTART=4009 PX4_SIM_MODEL=gz_r1_rover PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i 2" C-m
 
 # Wait for everything to launch and spawn and then launch the ROS 2 nodes
 tmux send-keys -t $SESSION:0.4 "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && ros2 launch px4_sim_offboard offboard_launch.py")" C-m
@@ -194,17 +210,55 @@ tmux split-window -v -t $SESSION:1.1    # Create pane 1.3 from 1.1
 
 tmux select-layout -t $SESSION:1 tiled
 
-
 # Echo each vehicles odometry topic
 tmux send-keys -t $SESSION:1.0 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /agv/odom")" C-m
 tmux send-keys -t $SESSION:1.1 "$(build_ros_shell_command "sleep 27 && cd \"$ROS_WS\" && ros2 topic echo /uav/odom")" C-m
 
 if (( LAUNCH_LOCALIZATION )); then
   tmux send-keys -t $SESSION:1.2 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 launch uwb_localization localization.launch.py")" C-m
-  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko_optimization_node/optimized_T /eliko_optimization_node/optimized_T_nopr /eliko_optimization_node/ransac_optimized_T /pose_graph_node/uav_anchor /pose_graph_node/agv_anchor")" C-m
+fi
+
+if (( RECORD_BAG )); then
+  BAG_TOPICS=(
+    /uav/gt
+    /agv/gt
+    /uav/odom
+    /agv/odom
+    /eliko/Distances
+  )
+
+  # Add all individual anchor-tag UWB topics.
+  BAG_TOPICS+=("${UWB_PAIR_TOPICS[@]}")
+
+  # Add localization outputs only when localization node is launched.
+  if (( LAUNCH_LOCALIZATION )); then
+    BAG_TOPICS+=(
+      /eliko_optimization_node/optimized_T
+      /eliko_optimization_node/optimized_T_nopr
+      /eliko_optimization_node/ransac_optimized_T
+      /pose_graph_node/uav_anchor
+      /pose_graph_node/agv_anchor
+    )
+  fi
+
+  # Deduplicate topics while preserving order.
+  UNIQUE_BAG_TOPICS=()
+  declare -A seen_topics=()
+  for topic in "${BAG_TOPICS[@]}"; do
+    [[ -z "${topic:-}" ]] && continue
+    if [[ -z "${seen_topics[$topic]+x}" ]]; then
+      UNIQUE_BAG_TOPICS+=("$topic")
+      seen_topics[$topic]=1
+    fi
+  done
+
+  BAG_CMD="sleep 30 && cd \"$ROS_WS\" && ros2 bag record"
+  for topic in "${UNIQUE_BAG_TOPICS[@]}"; do
+    BAG_CMD+=" $topic"
+  done
+  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "$BAG_CMD")" C-m
 else
-  # Record the baseline ROS 2 topics for post-processing.
-  tmux send-keys -t $SESSION:1.3 "$(build_ros_shell_command "sleep 30 && cd \"$ROS_WS\" && ros2 bag record /uav/gt /agv/gt /uav/odom /agv/odom /eliko/Distances")" C-m
+  tmux send-keys -t $SESSION:1.3 "echo '[INFO] Bag recording disabled. Use --bag to enable.'" C-m
 fi
 
 

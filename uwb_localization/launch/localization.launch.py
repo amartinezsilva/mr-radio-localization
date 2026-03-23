@@ -31,6 +31,15 @@ def generate_launch_description():
         parameters=[config]
         )
     
+    rviz = Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            output='screen',
+            parameters=[{'use_sim_time': True}],
+            arguments=['-d', rviz_config],
+        )
+    
     bag_full = ExecuteProcess(
         cmd=['ros2', 'bag', 'play', path_to_bag, '--clock'],
         output='screen'

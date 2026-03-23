@@ -10,4 +10,13 @@ uav_offboard_control:
     ros_gt_topic: "/uav/gt"
     lookahead_distance: 2.0
     cruise_speed: 0.5
+    odom_error_position: 2.0 # %,  meters for every 100 meters traveled
+    odom_error_angle: 2.0 # % degrees for every 100 degrees
     uav_origin: [0.5, -0.5, 0.0, 0.0, 0.0, 0.524] #x y z r p y #spawning location of the UAV in Gazebo(ENU)
+    tags:
+      t1:
+        id: "0x001155"
+        position: [-0.24, -0.24, -0.06]
+      t2:
+        id: "0x001397"
+        position: [0.24, 0.24, -0.06]
