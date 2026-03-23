@@ -1,0 +1,4 @@
+[submodule "UWBPX4Sim"]
+	path = UWBPX4Sim
+	url = https://github.com/amartinezsilva/UWBPX4Sim
+	branch = main
