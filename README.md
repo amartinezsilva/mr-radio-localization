@@ -27,6 +27,15 @@ Clone this repository along with the dependency packages to your ROS 2 workspace
 
 **Note**: to use the SITL implementation of this package, we recommend setting up the simulation environment first and then setting up this package. Specific installation instructions for the SITL environment are found below.
 
+## Cloning this repository
+
+To clone the parent repository together with the ```UWBPX4Sim``` submodule:
+
+```bash
+git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
+cd mr-radio-localization
+```
+
 ## Additional Dependencies (for PX4 SITL only)
 
 * [Gazebo Harmonic](https://gazebosim.org/docs/harmonic/ros_installation/).
@@ -44,7 +53,7 @@ This repository contains two ROS2 packages:
 * ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
 
-* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL (see instructions below). The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
+* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL. Detailed setup, plugin parameters, and usage instructions are documented in [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md). The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
 
 ![](images/Combined_Diagram.drawio.png)
 
@@ -74,27 +83,7 @@ ros2 launch uwb_localization localization_sim.launch.py
 
 This package includes an enhanced simulator for relative localization which is integrated with [PX4](https://docs.px4.io/main/en/simulation/) Software In The Loop, which supports multi-vehicle simulation with Gazebo and ROS 2. We provide the following simulation tools:
 
-* ```UWBPX4Sim``` includes a ```models``` folder with modified versions the differential rover ```r1_rover``` and the ```x500``` UAV with UWB anchors and tags mounted onboard each respective platform, which act as drop-in replacements for the existing ones. Reference for the original models can be found [here](https://docs.px4.io/main/en/sim_gazebo_gz/vehicles.html). The folder ```uwb_gazebo_plugin``` contains a custom plugin that reports distances between each anchor and tag, which is meant to be included under the plugins directory of PX4-Autopilot. 
-
-  You can regenerate UWB anchor/tag counts and positions with:
-  ```
-  python3 UWBPX4Sim/tools/configure_uwb_layout.py \
-    --layout UWBPX4Sim/uwb_layout.example.json
-  ```
-  The layout JSON expects two arrays:
-  - `anchors`: `[[x,y,z], ...]` mounted on `r1_rover`
-  - `tags`: `[[x,y,z], ...]` mounted on `x500_base`
-  The ordering is positional and defines the sensor indices used everywhere else:
-  - `anchors[0] -> a1`, `anchors[1] -> a2`, ...
-  - `tags[0] -> t1`, `tags[1] -> t2`, ...
-  As a result, the generated Gazebo range topics follow the same numbering (for example, `a1t2` means the first anchor entry and the second tag entry in the layout JSON).
-  The ID arrays in `px4_sim_offboard/config/agv_offboard_params.yaml` must be kept in the same order:
-  - `anchors.ids[0]` is the serial number assigned to `a1`
-  - `tags.ids[0]` is the serial number assigned to `t1`
-  If you reorder the `anchors` or `tags` arrays in the layout JSON, reorder the corresponding `anchors.ids` / `tags.ids` arrays as well so the published IDs still match the intended physical sensor positions.
-  This also regenerates bridge configs for all `aItJ` topic pairs:
-  - `UWBPX4Sim/uwb_bridge.yaml`
-  - `px4_sim_offboard/config/uwb_bridge.yaml` (used by `offboard_launch.py`)
+* ```UWBPX4Sim``` contains the modified Gazebo models, world files, bridge configuration, layout-generation tools, and the custom UWB Gazebo plugin used by the SITL setup. For the plugin-specific files, parameter description, layout regeneration, and PX4 integration steps, please refer to [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md).
 
 * ```px4_sim_offboard``` includes a set of nodes that interact with the simulator, allowing to obtain sensor readings and input commands to each of the vehicles. It includes a simple trajectory tracker for each of the robots. It also parses messages from ```px4_msgs``` format to standard ROS formats, for better integration with the optimizer. 
 
@@ -112,75 +101,13 @@ This package includes an enhanced simulator for relative localization which is i
 
 6) Build and source ROS2 [Workspace](https://docs.px4.io/main/en/ros2/user_guide.html#build-ros-2-workspace). To check that everything is working, we strongly encourage to also test the [multi-vehicle](https://docs.px4.io/main/en/sim_gazebo_gz/multi_vehicle_simulation.html) simulation example with ROS2 and Gazebo.
 
-7) Copy the contents of the ```models``` folder in ```UWBPX4Sim``` into ```/path/to/PX4-Autopilot/Tools/simulation/gz/models```
+7) Follow the PX4 integration instructions in [```UWBPX4Sim/README.md```](UWBPX4Sim/README.md) to copy the Gazebo models and plugin into PX4-Autopilot, configure the runtime plugin instance in ```server.config```, and build ```px4_sitl```.
 
-8) Add the custom plugin (steps taken from [template](https://github.com/PX4/PX4-Autopilot/tree/main/src/modules/simulation/gz_plugins/template_plugin) plugin instructions) 
-    
-    8.1: Copy the folder ```uwb_gazebo_plugin``` into ```/path/to/PX4-Autopilot/src/modules/simulation/gz_plugins```, and include the plugin for compilation by adding the following lines to the top-level ```CMakeLists.txt```. 
+8) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) 
 
-```cmake
-    add_subdirectory(uwb_gazebo_plugin)
-    add_custom_target(px4_gz_plugins ALL DEPENDS OpticalFlowSystem MovingPlatformController TemplatePlugin GenericMotorModelPlugin BuoyancySystemPlugin SpacecraftThrusterModelPlugin UWBGazeboPlugin)
-```
-    8.2: Runtime plugin instance parameters are **not** set in CMake; they are set in `/path/to/PX4-Autopilot/src/modules/simulation/gz_bridge/server.config` when loading the plugin:
+9) Add this package and its dependencies to your workspace.
 
-```xml
-<plugin entity_name="*" entity_type="world" filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem">
-  <topic>/uwb_gz_simulator/distances</topic>
-  <ground_truth_topic>/uwb_gz_simulator/distances_ground_truth</ground_truth_topic>
-
-  <!-- Additive measurement mean offset in cm. -->
-  <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
-
-  <!-- Optional persistent per anchor-tag bias in cm. -->
-  <apply_pair_bias>false</apply_pair_bias>
-  <bias_min_cm>-27.0</bias_min_cm>
-  <bias_max_cm>20.0</bias_max_cm>
-
-  <!-- Enable NLOS-aware blockage checks and ignore tiny endpoint self-intersections. -->
-  <enable_nlos_dropout>true</enable_nlos_dropout>
-  <nlos_endpoint_margin_m>0.02</nlos_endpoint_margin_m>
-
-  <!-- LOS distance-based dropout model. -->
-  <los_dropout_start_distance_m>10.0</los_dropout_start_distance_m>
-  <los_dropout_end_distance_m>70.0</los_dropout_end_distance_m>
-  <los_hard_dropout_distance_m>75.0</los_hard_dropout_distance_m>
-
-  <!-- LOS thickness / NLOS regime boundaries. -->
-  <los_max_thickness_m>0.10</los_max_thickness_m>
-  <soft_nlos_max_thickness_m>0.50</soft_nlos_max_thickness_m>
-  <blackout_thickness_m>1.0</blackout_thickness_m>
-
-  <!-- Extra Hard-NLOS slope relative to Soft NLOS (0 = same slope, 1 = double slope). -->
-  <hard_nlos_gap_ratio>0.75</hard_nlos_gap_ratio>
-
-  <!-- Dropout probability range. -->
-  <min_dropout_probability>0.02</min_dropout_probability>
-  <max_dropout_probability>0.90</max_dropout_probability>
-
-  <!-- Range noise standard deviation model in cm. -->
-  <min_noise_stddev_cm>12.0</min_noise_stddev_cm>
-  <max_noise_stddev_cm>50.0</max_noise_stddev_cm>
-  <los_stddev_start_distance_m>15.0</los_stddev_start_distance_m>
-  <los_stddev_end_distance_m>75.0</los_stddev_end_distance_m>
-
-  <!-- Extra NLOS thickness importance relative to the fixed distance baseline (0 = equal, 1 = twice as influential). -->
-  <nlos_dropout_thickness_extra_weight>0.5</nlos_dropout_thickness_extra_weight>
-  <nlos_stddev_thickness_extra_weight>0.5</nlos_stddev_thickness_extra_weight>
-</plugin>
-```
-
-9) Build the code after adding the plugin: 
-```
-cd /path/to/PX4-Autopilot
-make px4_sitl
-```
-
-10) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) 
-
-11) Add this package and its dependencies to your workspace.
-
-12) The script ``simulator_launcher.sh`` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
+10) The script ``simulator_launcher.sh`` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
 
 ```
 export ROS_WS=/path/to/your_ws
@@ -188,7 +115,7 @@ export PX4_DIR=/path/to/PX4-Autopilot
 export QGC_PATH=/path/to/QGroundControl.AppImage
 ```
 
-13) Give permissions to the simulator script and execute it: 
+11) Give permissions to the simulator script and execute it: 
 
 ```
 cd <ros2_ws>/src/mr-radio-localization
