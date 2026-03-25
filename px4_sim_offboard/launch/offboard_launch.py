@@ -17,14 +17,6 @@ def generate_launch_description():
         'agv_offboard_params.yaml'
     )
 
-    # Path to uwb_bridge config (installed with px4_sim_offboard)
-    uwb_bridge_config = os.path.join(
-        get_package_share_directory('px4_sim_offboard'),
-        'config',
-        'uwb_bridge.yaml'
-    )
-
-
     return LaunchDescription([
         Node(
             package='px4_sim_offboard',
@@ -40,14 +32,6 @@ def generate_launch_description():
             name='agv_offboard_control',
             output='screen',
             parameters=[agv_config_file]
-        ),
-
-        Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            name='ros_gz_parameter_bridge',
-            output='screen',
-            arguments=['--ros-args', '-p', f'config_file:={uwb_bridge_config}']
         ),
 
        Node(
