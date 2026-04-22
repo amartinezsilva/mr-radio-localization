@@ -25,7 +25,7 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 
 Clone this repository along with the dependency packages to your ROS 2 workspace and compile with the standard ```colcon build``` command. Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 
-**Note**: to use the SITL implementation of this package, we recommend setting up the simulation environment first and then setting up this package. Specific installation instructions for the SITL environment are found below.
+**Note**: if you want to use the PX4/Gazebo SITL setup, treat [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) as the source of truth for all simulation-specific instructions. This parent repository focuses on the localization stack itself.
 
 ## Cloning this repository
 
@@ -36,14 +36,20 @@ git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-locali
 cd mr-radio-localization
 ```
 
-## Additional Dependencies (for PX4 SITL only)
+## PX4 / Gazebo SITL note
 
-* [Gazebo Harmonic](https://gazebosim.org/docs/harmonic/ros_installation/).
-* [QGC](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html)
-* [PX4 Toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html)
-* [tmux](https://github.com/tmux/tmux/wiki/Installing)
+All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
 
-**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
+In particular, use the `UWBPX4Sim` README for:
+
+- Gazebo Harmonic and PX4 SITL setup
+- QGroundControl and Micro XRCE-DDS setup
+- UWB layout generation
+- generated model installation into PX4
+- `px4_sim_offboard` build and launch
+- UWB plugin configuration and bridge topics
+
+**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
 
 
 ## Main components
@@ -81,53 +87,18 @@ ros2 launch uwb_localization localization_sim.launch.py
 
 ## PX4 SITL Simulator
 
-This package includes an enhanced simulator for relative localization which is integrated with [PX4](https://docs.px4.io/main/en/simulation/) Software In The Loop, which supports multi-vehicle simulation with Gazebo and ROS 2. We provide the following simulation tools:
+The SITL simulator is owned by the [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) submodule.
 
-* ```UWBPX4Sim``` contains the modified Gazebo models, world files, bridge configuration, layout-generation tools, the custom UWB Gazebo plugin, the ROS 2 bridge/offboard package, and the tmux launcher used by the SITL setup. For the simulator-specific files, parameter description, layout regeneration, ROS 2 package build, launcher usage, and PX4 integration steps, please refer to [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
+Use that repository for:
 
-### Setup instructions (Ubuntu 24.04)
+- simulator setup instructions
+- layout-file configuration
+- model generation
+- PX4 plugin installation
+- bridge/offboard launch behavior
+- multi-vehicle simulation
 
-1) Install [ROS2](https://docs.ros.org/en/jazzy/index.html) Jazzy 
-
-2) Install [Gazebo](https://gazebosim.org/docs/harmonic/ros_installation/) Harmonic.
-
-3) Download [QGC](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html) Daily Build.
-
-4) Install the PX4 [Toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html) for Ubuntu. 
-
-5) Set up Micro [XRCE-DDS](https://docs.px4.io/main/en/ros2/user_guide.html#setup-micro-xrce-dds-agent-client) Agent & Client for PX4-ROS2 communication.
-
-6) Build and source ROS2 [Workspace](https://docs.px4.io/main/en/ros2/user_guide.html#build-ros-2-workspace). To check that everything is working, we strongly encourage to also test the [multi-vehicle](https://docs.px4.io/main/en/sim_gazebo_gz/multi_vehicle_simulation.html) simulation example with ROS2 and Gazebo.
-
-7) Follow the PX4 integration instructions in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) to copy the Gazebo models and plugin into PX4-Autopilot, configure the runtime plugin instance in ```server.config```, and build ```px4_sitl```.
-
-8) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) 
-
-9) Add this package and its dependencies to your workspace. For SITL, also clone and build the ROS 2 package that lives inside ```UWBPX4Sim``` as described in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
-
-10) The launcher in ```UWBPX4Sim``` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
-
-```
-export ROS_WS=/path/to/your_ws
-export PX4_DIR=/path/to/PX4-Autopilot
-export QGC_PATH=/path/to/QGroundControl.AppImage
-```
-
-11) Give permissions to the simulator script and execute it from the ```UWBPX4Sim``` repository: 
-
-```
-cd <ros2_ws>/src/UWBPX4Sim
-chmod +x simulator_launcher.sh
-./simulator_launcher.sh
-```
-
-Due to the computational demands of the simulator, we recommend to record the robot trajectories to a bag file first, store it under ``uwb_localization/bags`` and then run ``localization.launch.py`` providing the name to the recorded bag. However, you can still run the relative localization at the same time by using this command:
-
-```
-./simulator_launcher.sh --with-localization
-```
-
-Note that the simulator takes a while to load. After about 30 seconds, you should see the two robots start to move. 
+Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
 
 # Run localization with recorded data
 
