@@ -25,7 +25,6 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 
 Clone this repository along with the dependency packages to your ROS 2 workspace and compile with the standard ```colcon build``` command. Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 
-**Note**: if you want to use the PX4/Gazebo SITL setup, treat [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) as the source of truth for all simulation-specific instructions. This parent repository focuses on the localization stack itself.
 
 ## Cloning this repository
 
@@ -36,21 +35,13 @@ git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-locali
 cd mr-radio-localization
 ```
 
-## PX4 / Gazebo SITL note
+## PX4 / Gazebo SITL
 
-All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
+All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). If you want to use this setup, follow the instructions there to complete the setup first. This repository focuses on the localization stack.
 
-In particular, use the `UWBPX4Sim` README for:
-
-- Gazebo Harmonic and PX4 SITL setup
-- QGroundControl and Micro XRCE-DDS setup
-- UWB layout generation
-- generated model installation into PX4
-- `px4_sim_offboard` build and launch
-- UWB plugin configuration and bridge topics
+Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
 
 **Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
-
 
 ## Main components
 
@@ -83,22 +74,6 @@ The third and final launcher is a basic simulated scenario with just UWB and gen
 ros2 launch uwb_localization localization_sim.launch.py
 
 ```
-
-
-## PX4 SITL Simulator
-
-The SITL simulator is owned by the [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) submodule.
-
-Use that repository for:
-
-- simulator setup instructions
-- layout-file configuration
-- model generation
-- PX4 plugin installation
-- bridge/offboard launch behavior
-- multi-vehicle simulation
-
-Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
 
 # Run localization with recorded data
 
