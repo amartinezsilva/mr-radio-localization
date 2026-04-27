@@ -17,22 +17,23 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 * Ubuntu 22.04 LTS and ROS 2 [Humble](https://docs.ros.org/en/humble/index.html) or Ubuntu 24.04 LTS and ROS 2 [Jazzy](https://docs.ros.org/en/jazzy/index.html)
 * [Ceres Solver](https://github.com/ceres-solver/ceres-solver)
 * [Sophus](https://github.com/strasdat/Sophus)
-* [pcl_ros](https://github.com/ros-perception/perception_pcl)
 * [small_gicp](https://github.com/koide3/small_gicp)
+* [pcl_ros](https://github.com/ros-perception/perception_pcl)
 * [eliko_ros](https://github.com/robotics-upo/eliko_ros)
 * [ars548_ros](https://github.com/robotics-upo/ars548_ros)
 * [4D-Radar-Odom](https://github.com/robotics-upo/4D-Radar-Odom/tree/arco-drone-integration) branch ```arco_drone_integration```.
 
-Clone this repository along with the dependency packages to your ROS 2 workspace and compile with the standard ```colcon build``` command. Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
-
+Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 
 ## Cloning this repository
 
-To clone the parent repository together with the ```UWBPX4Sim``` submodule:
+Once the aforementioned dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
 
 ```bash
+cd <ros_ws>/src
 git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
-cd mr-radio-localization
+cd ..
+colcon build
 ```
 
 ## PX4 / Gazebo SITL
