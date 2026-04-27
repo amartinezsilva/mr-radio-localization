@@ -85,6 +85,14 @@ def generate_launch_description():
         parameters=[config_agv]
     )
 
-    nodes_to_execute = [node1, node2, node3, node4, bag_full, uav_radar_pcl_processor, agv_radar_pcl_processor]
+    nodes_to_execute = [
+        node1,
+        node2,
+        node3,
+        node4,
+        bag_full,
+        uav_radar_pcl_processor,
+        agv_radar_pcl_processor,
+    ]
     
     return LaunchDescription(nodes_to_execute)

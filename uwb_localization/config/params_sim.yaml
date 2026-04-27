@@ -1,8 +1,9 @@
 eliko_global_opt_node:
   ros__parameters:
     use_sim_time: true
-    odom_topic_agv: "/agv/odom" #or "/agv/odom" #"/arco/idmind_motors/odom"
-    odom_topic_uav: "/uav/odom"
+    distances_topic: "/ugv_0/eliko/Distances"
+    odom_topic_agv: "/ugv_0/odom"
+    odom_topic_uav: "/uav_0/odom"
     opt_timer_rate: 10.0 #Hz
     min_measurements: 50
     min_traveled_distance: 0.5 #m
@@ -22,21 +23,21 @@ eliko_global_opt_node:
     anchors:
       # Dynamic layout: ids and positions are aligned by index.
       # positions is flattened as [x1,y1,z1,x2,y2,z2,...]
-      ids: ["0x0009D6", "0x0009E5", "0x0016FA", "0x0016CF"]
+      ids: ["1", "2", "3", "4"]
       positions: [-0.32, 0.3, 0.875, 0.32, -0.3, 0.875, 0.32, 0.3, 0.33, -0.32, -0.3, 0.33]
     tags:
       # Dynamic layout: ids and positions are aligned by index.
       # positions is flattened as [x1,y1,z1,x2,y2,z2,...]
-      ids: ["0x001155", "0x001397"]
+      ids: ["1", "2"]
       positions: [-0.24, -0.24, -0.06, 0.24, 0.24, -0.06]
 
 pose_optimization_node:
   ros__parameters:
     use_sim_time: true
-    odom_topic_agv: "/agv/odom" #or "/agv/odom" #"/arco/idmind_motors/odom"
+    odom_topic_agv: "/ugv_0/odom"
     radar_topic_agv: "/agv/filtered_pointcloud" #or /arco/radar/PointCloudDetection OR /agv/filtered_pointcloud
     radar_egovel_topic_agv: "/agv/Ego_Vel_Twist"
-    odom_topic_uav: "/uav/odom"
+    odom_topic_uav: "/uav_0/odom"
     radar_topic_uav: "/uav/filtered_pointcloud" #/drone/radar/PointCloudDetection OR /uav/filtered_pointcloud
     radar_egovel_topic_uav: "/uav/Ego_Vel_Twist"
     opt_timer_rate: 10.0 #Hz

@@ -1,6 +1,7 @@
 eliko_global_opt_node:
   ros__parameters:
     use_sim_time: true
+    distances_topic: "/eliko/Distances"
     odom_topic_agv: "/agv/odom" #or "/agv/odom" #"/arco/idmind_motors/odom"
     odom_topic_uav: "/uav/odom"
     opt_timer_rate: 10.0 #Hz
