@@ -17,34 +17,32 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 * Ubuntu 22.04 LTS and ROS 2 [Humble](https://docs.ros.org/en/humble/index.html) or Ubuntu 24.04 LTS and ROS 2 [Jazzy](https://docs.ros.org/en/jazzy/index.html)
 * [Ceres Solver](https://github.com/ceres-solver/ceres-solver)
 * [Sophus](https://github.com/strasdat/Sophus)
-* [pcl_ros](https://github.com/ros-perception/perception_pcl)
 * [small_gicp](https://github.com/koide3/small_gicp)
+* [pcl_ros](https://github.com/ros-perception/perception_pcl)
 * [eliko_ros](https://github.com/robotics-upo/eliko_ros)
 * [ars548_ros](https://github.com/robotics-upo/ars548_ros)
 * [4D-Radar-Odom](https://github.com/robotics-upo/4D-Radar-Odom/tree/arco-drone-integration) branch ```arco_drone_integration```.
 
-Clone this repository along with the dependency packages to your ROS 2 workspace and compile with the standard ```colcon build``` command. Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
-
-**Note**: to use the SITL implementation of this package, we recommend setting up the simulation environment first and then setting up this package. Specific installation instructions for the SITL environment are found below.
+Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 
 ## Cloning this repository
 
-To clone the parent repository together with the ```UWBPX4Sim``` submodule:
+Once the aforementioned dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
 
 ```bash
+cd <ros_ws>/src
 git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
-cd mr-radio-localization
+cd ..
+colcon build
 ```
 
-## Additional Dependencies (for PX4 SITL only)
+## PX4 / Gazebo SITL
 
-* [Gazebo Harmonic](https://gazebosim.org/docs/harmonic/ros_installation/).
-* [QGC](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html)
-* [PX4 Toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html)
-* [tmux](https://github.com/tmux/tmux/wiki/Installing)
+All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). If you want to use this setup, follow the instructions there to complete the setup first. This repository focuses on the localization stack.
 
-**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
+Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
 
+**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
 
 ## Main components
 
@@ -53,7 +51,7 @@ This repository contains two ROS2 packages:
 * ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
 
-* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin and modified UAV and UGV models to be inserted in PX4 SITL. Detailed setup, plugin parameters, and usage instructions are documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). The ```px4_sim_offboard``` package contains the nodes that control the vehicles and parse telemetry to ROS standard messages compatible with the localization system.
+* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin, modified UAV and UGV models for PX4 SITL, the ROS 2 bridge/offboard package, and the simulator launcher. Detailed setup, plugin parameters, and usage instructions are documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
 
 ![](images/Combined_Diagram.drawio.png)
 
@@ -69,67 +67,15 @@ ros2 launch uwb_localization localization_dataset.launch.py
 ```
 **Note**: You can find and download the real-world dataset as a .bag file in [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/KNKWMJ). The original dataset was recorded in ROS 2 Humble and as a consequence has the SQLite ``.db3`` format. If you are using ROS Jazzy, you may have to convert it first to the new standard ``.mcap`` format with [this tool](https://mcap.dev/guides/getting-started/ros-2). 
 
-The second launcher ``localization.launch.py`` executes just the main system (without the radar odometry nodes) and is used in the SITL scenario which is launched as part of the tmux script ``simulator_launcher.sh``. 
+The second launcher ``localization.launch.py`` executes just the main system (without the radar odometry nodes) and is used in the SITL scenario launched from the simulator tools documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). 
 
+The localization configuration file is the single source of truth for the simulated robot pair. By default, ```params_sim.yaml``` subscribes to the first pair generated by ```UWBPX4Sim```: ```/ugv_0/odom```, ```/uav_0/odom```, and ```/ugv_0/eliko/Distances```. To localize a different pair, update the corresponding topic names and anchor/tag IDs in ```uwb_localization/config/params_sim.yaml```.
 
 The third and final launcher is a basic simulated scenario with just UWB and generic odometry (no SITL). To use it, type:
 ``` 
-ros2 launch uwb_localization localization_sim.launch.py
+ros2 launch uwb_localization localization_sim_basic.launch.py
 
 ```
-
-
-## PX4 SITL Simulator
-
-This package includes an enhanced simulator for relative localization which is integrated with [PX4](https://docs.px4.io/main/en/simulation/) Software In The Loop, which supports multi-vehicle simulation with Gazebo and ROS 2. We provide the following simulation tools:
-
-* ```UWBPX4Sim``` contains the modified Gazebo models, world files, bridge configuration, layout-generation tools, and the custom UWB Gazebo plugin used by the SITL setup. For the plugin-specific files, parameter description, layout regeneration, and PX4 integration steps, please refer to [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
-
-* ```px4_sim_offboard``` includes a set of nodes that interact with the simulator, allowing to obtain sensor readings and input commands to each of the vehicles. It includes a simple trajectory tracker for each of the robots. It also parses messages from ```px4_msgs``` format to standard ROS formats, for better integration with the optimizer. 
-
-### Setup instructions (Ubuntu 24.04)
-
-1) Install [ROS2](https://docs.ros.org/en/jazzy/index.html) Jazzy 
-
-2) Install [Gazebo](https://gazebosim.org/docs/harmonic/ros_installation/) Harmonic.
-
-3) Download [QGC](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html) Daily Build.
-
-4) Install the PX4 [Toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html) for Ubuntu. 
-
-5) Set up Micro [XRCE-DDS](https://docs.px4.io/main/en/ros2/user_guide.html#setup-micro-xrce-dds-agent-client) Agent & Client for PX4-ROS2 communication.
-
-6) Build and source ROS2 [Workspace](https://docs.px4.io/main/en/ros2/user_guide.html#build-ros-2-workspace). To check that everything is working, we strongly encourage to also test the [multi-vehicle](https://docs.px4.io/main/en/sim_gazebo_gz/multi_vehicle_simulation.html) simulation example with ROS2 and Gazebo.
-
-7) Follow the PX4 integration instructions in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md) to copy the Gazebo models and plugin into PX4-Autopilot, configure the runtime plugin instance in ```server.config```, and build ```px4_sitl```.
-
-8) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) 
-
-9) Add this package and its dependencies to your workspace.
-
-10) The script ``simulator_launcher.sh`` auto-detects the ROS 2 workspace from its own location, uses ``~/PX4-Autopilot`` by default, and searches ``~/Desktop`` and ``~/Downloads`` for the QGroundControl AppImage. If your setup differs, override any of these paths before running it:
-
-```
-export ROS_WS=/path/to/your_ws
-export PX4_DIR=/path/to/PX4-Autopilot
-export QGC_PATH=/path/to/QGroundControl.AppImage
-```
-
-11) Give permissions to the simulator script and execute it: 
-
-```
-cd <ros2_ws>/src/mr-radio-localization
-chmod +x simulator_launcher.sh
-./simulator_launcher.sh
-```
-
-Due to the computational demands of the simulator, we recommend to record the robot trajectories to a bag file first, store it under ``uwb_localization/bags`` and then run ``localization.launch.py`` providing the name to the recorded bag. However, you can still run the relative localization at the same time by using this command:
-
-```
-./simulator_launcher.sh --with-localization
-```
-
-Note that the simulator takes a while to load. After about 30 seconds, you should see the two robots start to move. 
 
 # Run localization with recorded data
 
@@ -150,12 +96,6 @@ sudo make install
 
 ```
 sudo apt-get install libtclap-dev
-```
-
-* Older revisions of this repository may fail on the first ``colcon build`` because ``px4_sim_offboard/package.xml`` did not declare ``px4_ros_com`` as a dependency. The current version already includes that dependency, so a normal workspace build should resolve the package order correctly. If you are using an older checkout, update the repository or add the missing dependency manually:
-
-```xml
-<depend>px4_ros_com</depend>
 ```
 
 * In Ubuntu 24.04 LTS and ROS 2 Jazzy, there is a [previously reported issue](https://discuss.px4.io/t/dds-faild-to-connect-ros2-jazzy/47966/3) that prevents the MicroXRCE Agent from connecting to the PX4 topics. This is because, when building the Micro-XRCE-DDS Agent on Ubuntu 24.04 (ROS 2 Jazzy) as part of the SITL setup, there may be a conflict between the locally built libraries (FastDDS/FastCDR) and the ones provided by the ROS 2 Jazzy default installation (``opt/ros``). The more straightforward workaround would be to tell your shell to look at your local build folders before the ROS folders by placing your paths at the beginning of the ``LD_LIBRARY_PATH``. To do it, find exactly where your libraries are located (replace ``path`` with the directory where you have cloned Micro-XRCE-DDS-Agent).

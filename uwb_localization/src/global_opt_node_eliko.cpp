@@ -57,7 +57,7 @@ public:
 
     //Subscribe to distances publisher
     eliko_distances_sub_ = this->create_subscription<eliko_messages::msg::DistancesList>(
-                "/eliko/Distances", 10, std::bind(&ElikoGlobalOptNode::distancesCoordsCb, this, std::placeholders::_1));
+                distances_topic_, 10, std::bind(&ElikoGlobalOptNode::distancesCoordsCb, this, std::placeholders::_1));
 
     rclcpp::SensorDataQoS qos; // Use a QoS profile compatible with sensor data
 
@@ -213,8 +213,9 @@ private:
 
     void declareParams() {
 
-         // Declare parameters with their default values.
+        // Declare parameters with their default values.
         // Topics and update rate
+        this->declare_parameter<std::string>("distances_topic", "/eliko/Distances");
         this->declare_parameter<std::string>("odom_topic_agv", "/arco/idmind_motors/odom");
         this->declare_parameter<std::string>("odom_topic_uav", "/uav/odom");
         this->declare_parameter<double>("opt_timer_rate_", 10.0);  // in Hz
@@ -259,6 +260,7 @@ private:
 
     void getParams() {
 
+        this->get_parameter("distances_topic", distances_topic_);
         this->get_parameter("odom_topic_agv", odom_topic_agv_);
         this->get_parameter("odom_topic_uav", odom_topic_uav_);
         this->get_parameter("opt_timer_rate_", opt_timer_rate_);
@@ -294,6 +296,7 @@ private:
 
         // Log the read parameters.
         RCLCPP_INFO(this->get_logger(), "Parameters read:");
+        RCLCPP_INFO(this->get_logger(), "  distances_topic: %s", distances_topic_.c_str());
         RCLCPP_INFO(this->get_logger(), "  odom_topic_agv: %s", odom_topic_agv_.c_str());
         RCLCPP_INFO(this->get_logger(), "  odom_topic_uav: %s", odom_topic_uav_.c_str());
         RCLCPP_INFO(this->get_logger(), "  opt_timer_rate_: %f Hz", opt_timer_rate_);
@@ -1099,7 +1102,7 @@ private:
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     //Parameters
-    std::string odom_topic_agv_, odom_topic_uav_;
+    std::string distances_topic_, odom_topic_agv_, odom_topic_uav_;
     double opt_timer_rate_;
     size_t min_measurements_;
     double min_traveled_distance_, min_traveled_angle_, max_traveled_distance_;

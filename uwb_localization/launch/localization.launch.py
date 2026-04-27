@@ -12,6 +12,7 @@ def generate_launch_description():
     package_dir = get_package_share_directory('uwb_localization')
 
     config = os.path.join(package_dir, 'config', 'params_sim.yaml')
+    rviz_config = os.path.join(package_dir, 'rviz', 'config.rviz')
 
     # Put here the path to the simulation bag you want to use, inside the  /bags folder
     bag_name = "dataset_lemniscate"
