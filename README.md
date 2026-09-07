@@ -44,6 +44,27 @@ Once the simulator is set up and you have recorded data or have the ROS topics a
 
 **Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
 
+## Running with Docker
+
+A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repository's full stack pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
+
+```bash
+cd <ros_ws>/src
+git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
+cd mr-radio-localization/docker
+docker compose run --build --rm app
+```
+
+The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `docker compose run --rm app` drops you into a guided menu:
+
+1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Run this once, and again whenever you change the layout or plugin parameters.
+2. **Run the demo simulation**: launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`. Once tmux attaches, open a new window (`Ctrl-b c`) and run `ros2 launch uwb_localization localization.launch.py` to see the relative localization estimate.
+3. **Open a shell**: skip the menu and get a plain shell in the container.
+
+You can also bypass the menu and run a one-off command directly, e.g. `docker compose run --rm app bash` or `docker compose run --rm app ros2 topic list`.
+
+`docker-compose.yml` bind-mounts `UWBPX4Sim/config/` (layout YAMLs), `UWBPX4Sim/uwb_gazebo_plugin/` (including `params.yaml`, the plugin's tuning file), and `UWBPX4Sim/worlds/` (custom Gazebo `.sdf` worlds) from the host into the container. Edit or add files there with your usual tools — including dropping in your own custom worlds — then re-run option 1 inside the container to apply the changes; no image rebuild needed.
+
 ## Main components
 
 This repository contains two ROS2 packages:
@@ -111,7 +132,7 @@ export LD_LIBRARY_PATH=/home/YOUR_USER/Micro-XRCE-DDS-Agent/build/temp_install/f
 
 Close the file and source it to apply the changes. After this, the agent should connect as expected and you should see the ROS 2 topics. 
 
-**COMING SOON**: We are preparing docker images with a complete functional setup to avoid these issues, and they will be ready soon. Please stay put. 
+If you'd rather avoid this class of issue entirely, see [Running with Docker](#running-with-docker) above for a pre-built, known-working environment.
 
 
 # Acknowledgements

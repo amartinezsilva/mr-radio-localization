@@ -1,9 +1,11 @@
 # Convenience wrapper around Dockerfile.
 #
-# Bind-mounts UWBPX4Sim's config/ (layout YAMLs) and uwb_gazebo_plugin/
-# (params.yaml + plugin source) so they can be edited from the host and take
-# effect inside the container without rebuilding the image -- re-run
-# setup_simulator.sh inside the container to apply changes.
+# Bind-mounts UWBPX4Sim's config/ (layout YAMLs), uwb_gazebo_plugin/
+# (params.yaml + plugin source), and worlds/ (custom Gazebo .sdf worlds) so
+# they can be edited from the host and take effect inside the container
+# without rebuilding the image -- re-run setup_simulator.sh inside the
+# container to apply changes. Drop your own .sdf files into UWBPX4Sim/worlds/
+# on the host and setup_simulator.sh's world picker (step 3) will list them.
 #
 # Usage (from this docker/ directory):
 #   docker compose run --build --rm app          # interactive setup/demo menu
@@ -22,3 +24,4 @@ services:
     volumes:
       - ../UWBPX4Sim/config:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/config
       - ../UWBPX4Sim/uwb_gazebo_plugin:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/uwb_gazebo_plugin
+      - ../UWBPX4Sim/worlds:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/worlds
