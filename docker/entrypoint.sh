@@ -3,7 +3,7 @@
 # entrypoint.sh - Interactive entrypoint for the mr-radio-localization image.
 #
 # With no arguments (or "menu"), loops on a menu letting the user run
-# UWBPX4Sim's guided setup, launch the SITL demo, or open a shell -- each
+# UWBPX4Sim's guided setup, launch the simulation, or open a shell -- each
 # option returns to the menu when it finishes, so the container stays up for
 # the whole session; pick "Exit" to actually end it. Any other arguments are
 # exec'd directly, so `docker run <image> <cmd>` still works as a plain
@@ -105,6 +105,15 @@ EOF
 }
 
 print_menu() {
+  # Tick shown next to "Launch simulation" once setup_simulator.sh has run
+  # and written its chosen layout/world/PX4_DIR to .setup_env -- lets the
+  # user tell at a glance, before picking option 2, whether a setup is
+  # already loaded or still needs to be run first. Checked fresh on every
+  # call (not cached) so it reflects setup having *just* finished too.
+  local setup_tick=""
+  if [[ -f "$UWBPX4SIM_DIR/.setup_env" ]]; then
+    setup_tick=" ${C_GREEN}✓ configured${C_RESET}"
+  fi
   cat <<EOF
 
 ${C_CYAN}==================================================${C_RESET}
@@ -112,7 +121,7 @@ ${C_CYAN}==================================================${C_RESET}
 ${C_CYAN}==================================================${C_RESET}
   ${C_GREEN}1)${C_RESET} Run UWBPX4Sim setup (setup_simulator.sh)
      Configure the PX4/Gazebo plugin, models, and layout.
-  ${C_GREEN}2)${C_RESET} Run the demo simulation
+  ${C_GREEN}2)${C_RESET} Launch simulation${setup_tick}
      Launch PX4 SITL + Gazebo + the UWB bridge/offboard nodes.
   ${C_GREEN}3)${C_RESET} Open a shell
   ${C_YELLOW}4)${C_RESET} Exit
@@ -136,8 +145,8 @@ run_setup() {
 
   # setup_simulator.sh ran as a child process, so it could not export
   # straight into this shell -- it wrote its chosen settings to .setup_env
-  # instead. Load them here so "Run the demo" (option 2) picks up the same
-  # layout/world/PX4_DIR/ROS_WS without the user re-typing them.
+  # instead. Load them here so "Launch simulation" (option 2) picks up the
+  # same layout/world/PX4_DIR/ROS_WS without the user re-typing them.
   local setup_env_file="$UWBPX4SIM_DIR/.setup_env"
   if [[ -f "$setup_env_file" ]]; then
     # shellcheck disable=SC1090
@@ -166,7 +175,7 @@ run_demo() {
   fi
 
   echo
-  log_info "Launching the SITL demo. Once tmux attaches, open a new window"
+  log_info "Launching the simulation. Once tmux attaches, open a new window"
   log_info "(Ctrl-b c) and run:"
   log_info "  ros2 launch uwb_localization localization.launch.py"
   log_info "to see the relative localization estimate."

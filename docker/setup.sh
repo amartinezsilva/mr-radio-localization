@@ -1,31 +1,55 @@
 #!/bin/bash
 #
-# install.sh - Build (and optionally launch) the mr-radio-localization image.
+# setup.sh - Build (and optionally launch) the mr-radio-localization image.
 #
 # Wraps `docker compose build` so you don't need to remember the compose
 # invocation or run it from this exact directory. Checks Docker/Compose are
-# available, warns about low disk space and offers to reclaim some first
-# (the image alone is ~25GB, and a build has failed mid-way from running out
-# of disk before), builds, then -- unless told not to -- also runs the X11
-# setup and `docker compose run` for you, so nothing has to be copy-pasted.
+# available, tells you about any existing image (and lets you just launch
+# it instead of rebuilding), warns about low disk space and offers to
+# reclaim some first (the image alone is ~25GB, and a build has failed
+# mid-way from running out of disk before), builds, then -- unless told not
+# to -- also runs the X11 setup and `docker compose run` for you, so
+# nothing has to be copy-pasted.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Colors only when writing to a real terminal, and never if the caller
+# opted out via the NO_COLOR convention (https://no-color.org) -- matches
+# entrypoint.sh's convention so the two scripts feel consistent.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  USE_COLOR=1
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'
+else
+  USE_COLOR=""
+  C_RESET="" C_BOLD="" C_DIM="" C_CYAN="" C_GREEN="" C_YELLOW="" C_RED=""
+fi
+
 ASSUME_YES=0
 DRY_RUN=0
 NO_CACHE=0
 RUN_AFTER=""      # "", "yes", "no"
+FORCE_ACTION=""   # "", "build", "launch"
 IMAGE="mr-radio-localization:jazzy"
 MIN_FREE_GB=35   # a build has failed mid-export with as much as 24-28GB free in practice;
                  # successful builds in the same environment needed ~40GB+ of real headroom
 
-log_step()  { printf '\n==> %s\n' "$1"; }
-log_info()  { printf '[INFO] %s\n' "$1"; }
-log_warn()  { printf '[WARN] %s\n' "$1" >&2; }
-log_error() { printf '[ERROR] %s\n' "$1" >&2; }
-log_ok()    { printf '[OK] %s\n' "$1"; }
+# Log helpers keep the literal "[INFO]"/"[WARN]"/etc. tags uncolored and
+# contiguous (color wraps the whole line from outside), so anything that
+# greps for those tags -- a human skimming, or a test harness -- still
+# matches regardless of whether color is on.
+log_step()  { printf '\n%s==> %s%s\n' "${C_BOLD}${C_CYAN}" "$1" "$C_RESET"; }
+log_info()  { printf '%s[INFO] %s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
+log_warn()  { printf '%s[WARN] %s%s\n' "$C_YELLOW" "$1" "$C_RESET" >&2; }
+log_error() { printf '%s[ERROR] %s%s\n' "$C_RED" "$1" "$C_RESET" >&2; }
+log_ok()    { printf '%s[OK] %s%s\n' "$C_GREEN" "$1" "$C_RESET"; }
 
 confirm() {
   # confirm "question" [default: y|n]
@@ -54,15 +78,21 @@ print_usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
 
-Builds the mr-radio-localization Docker image ($IMAGE).
+Builds (or launches) the mr-radio-localization Docker image ($IMAGE).
 
 Options:
+  --rebuild       Skip the existing-image prompt and always rebuild
+  --launch, -l    Skip the existing-image prompt and always launch the
+                   existing image directly, without building (errors if
+                   no image exists yet)
   --no-cache      Force a full rebuild, ignoring cached layers
-  --run           After building, run the X11 setup and start the container
-                   (xhost + docker compose run --rm app), without asking
+  --run           After building/launching, run the X11 setup and start
+                   the container (xhost + docker compose run --rm app),
+                   without asking
   --no-run        Skip that and just print the commands, without asking
-  -y, --yes       Non-interactive: proceed with recommended defaults, which
-                   includes running afterward, unless --no-run is also given
+  -y, --yes       Non-interactive: proceed with recommended defaults
+                   (rebuild if an image exists, run afterward), unless
+                   --launch or --no-run are also given
   -n, --dry-run   Print what would happen without changing anything
   -h, --help      Show this help message
 
@@ -74,6 +104,8 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --rebuild) FORCE_ACTION="build"; shift ;;
+    --launch|-l) FORCE_ACTION="launch"; shift ;;
     --no-cache) NO_CACHE=1; shift ;;
     --run) RUN_AFTER="yes"; shift ;;
     --no-run) RUN_AFTER="no"; shift ;;
@@ -84,8 +116,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "mr-radio-localization image build"
-echo "=================================="
+cat <<EOF
+${C_CYAN}${C_BOLD}==================================================
+  mr-radio-localization -- image setup
+==================================================${C_RESET}
+EOF
 (( DRY_RUN )) && log_warn "Dry-run mode: no files will be changed."
 
 # ---------------------------------------------------------------------------
@@ -101,7 +136,53 @@ fi
 log_ok "docker + docker compose available"
 
 # ---------------------------------------------------------------------------
-# 2. Disk space
+# 2. Existing image?
+# ---------------------------------------------------------------------------
+
+log_step "Checking for an existing image"
+ACTION="build"
+if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  created_raw="$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null)"
+  created_human="$(date -d "$created_raw" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$created_raw")"
+  image_size="$(docker images "$IMAGE" --format '{{.Size}}' 2>/dev/null)"
+  log_info "Found ${C_BOLD}$IMAGE${C_RESET}${C_CYAN} -- built $created_human, $image_size${C_RESET}"
+
+  if [[ -n "$FORCE_ACTION" ]]; then
+    ACTION="$FORCE_ACTION"
+  elif (( NO_CACHE )); then
+    ACTION="build"   # an explicit --no-cache means "rebuild", full stop
+  elif (( DRY_RUN || ASSUME_YES )); then
+    ACTION="build"   # keep -y/-n's prior always-build behavior; use --launch to skip it non-interactively
+  else
+    echo
+    echo "  ${C_GREEN}1)${C_RESET} Launch it now ${C_DIM}(fast -- skips the build)${C_RESET}"
+    echo "  ${C_GREEN}2)${C_RESET} Rebuild ${C_DIM}(picks up any code or Dockerfile changes)${C_RESET}"
+    echo "  ${C_YELLOW}3)${C_RESET} Cancel"
+    read -r -p "Choice [1]: " image_choice || image_choice=""
+    case "${image_choice:-1}" in
+      1) ACTION="launch" ;;
+      2) ACTION="build" ;;
+      3|c|C) log_info "Cancelled."; exit 0 ;;
+      *) log_warn "Unrecognized choice '$image_choice' -- launching the existing image."; ACTION="launch" ;;
+    esac
+  fi
+elif [[ "$FORCE_ACTION" == "launch" ]]; then
+  log_error "No existing $IMAGE image to launch -- run without --launch to build one first."
+  exit 1
+else
+  log_info "No existing image found -- a full build is needed."
+fi
+
+if [[ "$ACTION" == "launch" ]]; then
+  log_ok "Skipping the build -- launching the existing image."
+  # They already chose to launch; go straight to it unless --no-run overrides.
+  [[ -z "$RUN_AFTER" ]] && RUN_AFTER="yes"
+fi
+
+if [[ "$ACTION" == "build" ]]; then
+
+# ---------------------------------------------------------------------------
+# 3. Disk space
 # ---------------------------------------------------------------------------
 
 log_step "Checking disk space"
@@ -141,14 +222,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Build
+# 4. Build
 # ---------------------------------------------------------------------------
 
 log_step "Building the image"
 # --progress is a global `docker compose` flag, not a `build` one -- it has
 # to come before the subcommand.
-compose_args=(--progress=plain build app)
-(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache app)
+#
+# --build-arg CACHEBUST: a `RUN git clone` layer only invalidates when this
+# instruction's own text changes, not when the remote it clones actually
+# moves -- so without this, a normal (non---no-cache) rebuild would silently
+# keep serving a stale checkout of mr-radio-localization/UWBPX4Sim even after
+# new commits land. Passing a fresh value every time busts just that layer
+# (and everything after it) without paying for a full --no-cache rebuild of
+# the much more expensive earlier layers (base image, PX4-Autopilot,
+# small_gicp, Micro-XRCE-DDS-Agent). --no-cache still forces everything, for
+# when the earlier layers themselves need a clean rebuild.
+build_arg=(--build-arg "CACHEBUST=$(date +%s)")
+compose_args=(--progress=plain build "${build_arg[@]}" app)
+(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "${build_arg[@]}" app)
 
 if (( DRY_RUN )); then
   log_info "[DRY-RUN] (cd \"$SCRIPT_DIR\" && docker compose ${compose_args[*]})"
@@ -157,14 +249,10 @@ else
   log_ok "Image built: $IMAGE"
 fi
 
-# ---------------------------------------------------------------------------
-# 4. Run
-# ---------------------------------------------------------------------------
-
-log_step "Done"
+fi # ACTION == build
 
 # ---------------------------------------------------------------------------
-# 4a. Bind-mount write permissions
+# 5. Bind-mount write permissions
 # ---------------------------------------------------------------------------
 
 log_step "Granting the container write access to bind-mounted config directories"
@@ -183,9 +271,8 @@ log_step "Granting the container write access to bind-mounted config directories
 # "other" (matching existing owner/group read-write) without touching
 # execute bits on plain files, and applies recursively so both directories
 # (for new files) and already-existing files (layout/params saves that
-# overwrite in place) end up writable. Done unconditionally (not just when
-# --run is chosen) so it's also correct for anyone who runs the container
-# manually afterward instead of through this script.
+# overwrite in place) end up writable. Done unconditionally (not just on a
+# fresh build) so it's also correct when launching an existing image.
 gui_write_dirs=(
   "$SCRIPT_DIR/../UWBPX4Sim/config"
   "$SCRIPT_DIR/../UWBPX4Sim/uwb_gazebo_plugin"
@@ -200,6 +287,12 @@ for d in "${gui_write_dirs[@]}"; do
     fi
   fi
 done
+
+# ---------------------------------------------------------------------------
+# 6. Run
+# ---------------------------------------------------------------------------
+
+log_step "Done"
 
 should_run=0
 if [[ "$RUN_AFTER" == "yes" ]]; then

@@ -1,7 +1,7 @@
 # Convenience wrapper around Dockerfile.
 #
-# To build the image: ./install.sh (wraps `docker compose build`, checks
-# disk space first -- see install.sh --help).
+# To build (or launch) the image: ./setup.sh (wraps `docker compose build`,
+# tells you about any existing image, checks disk space -- see setup.sh --help).
 #
 # Usage (from this docker/ directory, Linux host with an X server):
 #   xhost +local:docker                           # allow the container to reach your X server (once per host session)

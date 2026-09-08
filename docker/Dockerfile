@@ -31,6 +31,14 @@ RUN cd /root/small_gicp && mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYP
 RUN cd /root/ && git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
 RUN cd /root/Micro-XRCE-DDS-Agent && mkdir build && cd build && cmake .. && make -j4 && make install && ldconfig /usr/local/lib/
 
+# Docker only invalidates a `RUN git clone` layer when this instruction's own
+# text changes, not when the remote it clones actually moves -- so a normal
+# cached rebuild would silently keep serving a stale checkout even after new
+# commits land upstream. CACHEBUST forces a fresh clone on every build that
+# passes a new value (see setup.sh, which passes the current timestamp)
+# without invalidating the expensive earlier layers (base image, PX4-Autopilot
+# clone/setup, small_gicp, Micro-XRCE-DDS-Agent) above it.
+ARG CACHEBUST=1
 RUN cd && mkdir -p ros2_ws/src && cd ros2_ws/src && git clone https://github.com/amartinezsilva/mr-radio-localization --recursive
 SHELL ["/bin/bash", "-c"]
 RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_msgs.git && cd ~/ros2_ws
