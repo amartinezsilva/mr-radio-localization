@@ -52,18 +52,20 @@ A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Ja
 cd <ros_ws>/src
 git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
 cd mr-radio-localization/docker
-docker compose run --build --rm app
+docker compose run --service-ports --build --rm app
 ```
 
-The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `docker compose run --rm app` drops you into a guided menu:
+The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `docker compose run --service-ports --rm app` drops you into a guided menu (`--service-ports` is needed for the setup GUI below to be reachable from your browser; `docker compose run`, unlike `up`, doesn't publish ports by default):
 
-1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Run this once, and again whenever you change the layout or plugin parameters.
+1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available. Run this once, and again whenever you change the layout or plugin parameters.
 2. **Run the demo simulation**: launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`. Once tmux attaches, open a new window (`Ctrl-b c`) and run `ros2 launch uwb_localization localization.launch.py` to see the relative localization estimate.
 3. **Open a shell**: skip the menu and get a plain shell in the container.
 
 You can also bypass the menu and run a one-off command directly, e.g. `docker compose run --rm app bash` or `docker compose run --rm app ros2 topic list`.
 
 `docker-compose.yml` bind-mounts `UWBPX4Sim/config/` (layout YAMLs), `UWBPX4Sim/uwb_gazebo_plugin/` (including `params.yaml`, the plugin's tuning file), and `UWBPX4Sim/worlds/` (custom Gazebo `.sdf` worlds) from the host into the container. Edit or add files there with your usual tools — including dropping in your own custom worlds — then re-run option 1 inside the container to apply the changes; no image rebuild needed.
+
+It also bind-mounts `UWBPX4Sim/ROS2/px4_sim_offboard/trajectories/` directly onto the offboard nodes' installed trajectory path, so dropping your own `trajectory_csv_file` CSV there (or editing an existing one) takes effect the next time the demo (re-)launches — no `setup_simulator.sh` re-run or rebuild needed for that one.
 
 ## Main components
 

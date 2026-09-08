@@ -1,16 +1,26 @@
 # Convenience wrapper around Dockerfile.
 #
-# Bind-mounts UWBPX4Sim's config/ (layout YAMLs), uwb_gazebo_plugin/
-# (params.yaml + plugin source), and worlds/ (custom Gazebo .sdf worlds) so
-# they can be edited from the host and take effect inside the container
-# without rebuilding the image -- re-run setup_simulator.sh inside the
-# container to apply changes. Drop your own .sdf files into UWBPX4Sim/worlds/
-# on the host and setup_simulator.sh's world picker (step 3) will list them.
+# To build the image: ./install.sh (wraps `docker compose build`, checks
+# disk space first -- see install.sh --help).
 #
-# Usage (from this docker/ directory):
-#   docker compose run --build --rm app          # interactive setup/demo menu
-#   docker compose run --rm app bash              # skip the menu, open a shell
-#   docker compose run --rm app ros2 topic list   # run a one-off command
+# Usage (from this docker/ directory, Linux host with an X server):
+#   xhost +local:docker                           # allow the container to reach your X server (once per host session)
+#   d="${DISPLAY#*:}"; chmod 777 "/tmp/.X11-unix/X${d%%.*}"   # see note below -- needed on Wayland/XWayland hosts
+#   docker compose run --service-ports --build --rm app   # interactive setup/demo menu
+#   docker compose run --rm app bash                       # skip the menu, open a shell
+#   docker compose run --rm app ros2 topic list              # run a one-off command
+#
+#
+# The chmod is a separate, extra requirement on Wayland/XWayland desktops (GNOME/GDM and others)
+# Classic Xorg sessions (no Wayland) are usually already 777 and don't need
+# this at all -- if `xhost` alone works, skip the chmod.
+#
+# `docker compose run` (unlike `up`) does not publish a service's `ports:`
+# unless you pass --service-ports -- without it, setup_simulator.sh's
+# configuration GUI (option 1 in the menu) starts fine inside the
+# container but is unreachable from the host browser. Not needed for the
+# `bash`/one-off examples above, which don't go through the menu.
+#
 #
 # --rm avoids leaving stopped containers behind between runs.
 
@@ -21,7 +31,28 @@ services:
     image: mr-radio-localization:jazzy
     stdin_open: true
     tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - UWB_GUI_PORT=${UWB_GUI_PORT:-5050}
+    ports:
+      # setup_simulator.sh's browser-based configuration GUI (gui/app.py).
+      # Passed into the container via UWB_GUI_PORT above too, so overriding
+      # it on the host changes both what's published and what the GUI binds to.
+      - "${UWB_GUI_PORT:-5050}:${UWB_GUI_PORT:-5050}"
     volumes:
       - ../UWBPX4Sim/config:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/config
       - ../UWBPX4Sim/uwb_gazebo_plugin:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/uwb_gazebo_plugin
       - ../UWBPX4Sim/worlds:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/worlds
+      - ../UWBPX4Sim/gui:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/gui
+      # Mounted onto the *installed* path, not the source tree: this is transparent
+      # for the bundled trajectories and adds the ability to drop in new
+      # ones from the host without rebuilding.
+      - ../UWBPX4Sim/ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined

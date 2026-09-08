@@ -2,37 +2,121 @@
 #
 # entrypoint.sh - Interactive entrypoint for the mr-radio-localization image.
 #
-# With no arguments (or "menu"), prompts the user to either run UWBPX4Sim's
-# guided setup or launch the SITL demo. Any other arguments are exec'd
-# directly, so `docker run <image> <cmd>` still works as a plain override.
+# With no arguments (or "menu"), loops on a menu letting the user run
+# UWBPX4Sim's guided setup, launch the SITL demo, or open a shell -- each
+# option returns to the menu when it finishes, so the container stays up for
+# the whole session; pick "Exit" to actually end it. Any other arguments are
+# exec'd directly, so `docker run <image> <cmd>` still works as a plain
+# override.
 
 set -e
 
-log_info() { printf '[INFO] %s\n' "$1"; }
-log_warn() { printf '[WARN] %s\n' "$1" >&2; }
+# Colors/spinner only when writing to a real terminal, and never if the
+# caller opted out via the NO_COLOR convention (https://no-color.org) --
+# scripted/piped invocations (docker run <image> <cmd>, log capture, CI)
+# must see plain, undecorated output.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  USE_COLOR=1
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+else
+  USE_COLOR=""
+  C_RESET="" C_BOLD="" C_DIM="" C_CYAN="" C_GREEN="" C_YELLOW=""
+fi
 
+# Log helpers keep the literal "[INFO]"/"[WARN]"/"[OK]" tags uncolored and
+# contiguous (color wraps the whole line from outside), so anything that
+# greps for those tags -- a human skimming, or a test harness -- still
+# matches regardless of whether color is on.
+log_info() { printf '%s[INFO] %s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
+log_warn() { printf '%s[WARN] %s%s\n' "$C_YELLOW" "$1" "$C_RESET" >&2; }
+log_ok()   { printf '%s[OK] %s%s\n' "$C_GREEN" "$1" "$C_RESET"; }
+
+# A spinner driven by the real sourcing work below, not a fake delay: it
+# runs concurrently in the background for exactly as long as that work
+# takes (near-instant most of the time, longer on a cold/slow disk) and
+# gets killed the moment it's done. Sourcing itself must still happen in
+# the foreground/current shell -- a background job's environment changes
+# never propagate back to its parent, so the spinner can only wrap it, not
+# replace it.
+SPINNER_PID=""
+
+spinner_start() {
+  local msg="$1..."
+  if [[ -z "$USE_COLOR" ]]; then
+    printf '%s\n' "$msg"
+    return
+  fi
+  {
+    local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
+    while :; do
+      printf '\r%s %s%s%s' "${frames:i%${#frames}:1}" "$C_CYAN" "$msg" "$C_RESET"
+      i=$((i + 1))
+      sleep 0.08
+    done
+  } &
+  SPINNER_PID=$!
+}
+
+spinner_stop() {
+  if [[ -n "$SPINNER_PID" ]]; then
+    kill "$SPINNER_PID" 2>/dev/null || true
+    wait "$SPINNER_PID" 2>/dev/null || true
+    printf '\r\033[K'
+    SPINNER_PID=""
+  fi
+}
+
+spinner_start "Preparing environment"
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
 if [[ -f "$HOME/ros2_ws/install/setup.bash" ]]; then
   source "$HOME/ros2_ws/install/setup.bash"
 fi
+spinner_stop
+log_ok "Environment ready."
 
 REPO_DIR="$HOME/ros2_ws/src/mr-radio-localization"
 UWBPX4SIM_DIR="$REPO_DIR/UWBPX4Sim"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 
-print_menu() {
-  cat <<'EOF'
+print_welcome() {
+  cat <<EOF
 
-==================================================
- mr-radio-localization dev container
-==================================================
-  1) Run UWBPX4Sim setup (setup_simulator.sh)
+${C_CYAN}${C_BOLD}==================================================
+  mr-radio-localization -- SITL dev container
+==================================================${C_RESET}
+
+PX4 SITL, Gazebo Harmonic, and the ROS 2 UWB relative-localization
+stack, pre-built and ready to go.
+
+${C_DIM}Tip: UWBPX4Sim/config, uwb_gazebo_plugin, and worlds are bind-mounted
+from the host -- edit a layout, params.yaml, or drop in a custom .sdf
+world there, then re-run setup (option 1) to apply it.
+
+Tip: for QGroundControl/Gazebo windows to appear, run on the HOST
+first: xhost +local:docker (see docker-compose.yml's comments for the
+extra step Wayland/XWayland desktops need).${C_RESET}
+EOF
+}
+
+print_menu() {
+  cat <<EOF
+
+${C_CYAN}==================================================${C_RESET}
+ ${C_BOLD}mr-radio-localization${C_RESET} dev container
+${C_CYAN}==================================================${C_RESET}
+  ${C_GREEN}1)${C_RESET} Run UWBPX4Sim setup (setup_simulator.sh)
      Configure the PX4/Gazebo plugin, models, and layout.
-  2) Run the demo simulation
+  ${C_GREEN}2)${C_RESET} Run the demo simulation
      Launch PX4 SITL + Gazebo + the UWB bridge/offboard nodes.
-  3) Open a shell
-==================================================
+  ${C_GREEN}3)${C_RESET} Open a shell
+  ${C_YELLOW}4)${C_RESET} Exit
+${C_CYAN}==================================================${C_RESET}
 EOF
 }
 
@@ -44,8 +128,26 @@ run_setup() {
     log_warn "docker-compose.yml's volumes, then try again."
     return 1
   fi
-  cd "$UWBPX4SIM_DIR"
-  exec ./setup_simulator.sh
+  # Not exec'd: setup_simulator.sh is one step in an interactive session, not
+  # the container's only job, so control must return here to the menu loop
+  # afterwards instead of the container exiting the moment it finishes.
+  ( cd "$UWBPX4SIM_DIR" && ./setup_simulator.sh )
+  log_info "Setup finished. Back to the menu."
+
+  # setup_simulator.sh ran as a child process, so it could not export
+  # straight into this shell -- it wrote its chosen settings to .setup_env
+  # instead. Load them here so "Run the demo" (option 2) picks up the same
+  # layout/world/PX4_DIR/ROS_WS without the user re-typing them.
+  local setup_env_file="$UWBPX4SIM_DIR/.setup_env"
+  if [[ -f "$setup_env_file" ]]; then
+    # shellcheck disable=SC1090
+    source "$setup_env_file"
+    log_info "Loaded simulation settings from setup:"
+    log_info "  UWB_LAYOUT_FILE=$UWB_LAYOUT_FILE"
+    [[ -n "${GZ_WORLD:-}" ]] && log_info "  GZ_WORLD=$GZ_WORLD"
+    log_info "  PX4_DIR=$PX4_DIR"
+    [[ -n "${ROS_WS:-}" ]] && log_info "  ROS_WS=$ROS_WS"
+  fi
 }
 
 run_demo() {
@@ -70,8 +172,10 @@ run_demo() {
   log_info "to see the relative localization estimate."
   echo
   read -r -p "Press Enter to continue (Ctrl-C to cancel)... " _ || true
-  cd "$UWBPX4SIM_DIR"
-  exec ./simulator_launcher.sh
+  # Not exec'd, same reason as run_setup: come back to the menu once the
+  # tmux session ends instead of exiting the container.
+  ( cd "$UWBPX4SIM_DIR" && ./simulator_launcher.sh )
+  log_info "Simulator session ended. Back to the menu."
 }
 
 confirm_yes() {
@@ -82,13 +186,15 @@ confirm_yes() {
 
 run_menu() {
   local choice
+  print_welcome
   while true; do
     print_menu
-    read -r -p "Select an option [1-3]: " choice || { echo; exec bash; }
+    read -r -p "Select an option [1-4]: " choice || { echo; exec bash; }
     case "$choice" in
       1) run_setup || true ;;
       2) run_demo || true ;;
-      3) exec bash ;;
+      3) bash || true; log_info "Shell closed. Back to the menu." ;;
+      4) log_info "Exiting."; exit 0 ;;
       *) echo "Invalid selection: '$choice'" ;;
     esac
   done
@@ -100,7 +206,7 @@ fi
 
 if [[ ! -t 0 ]]; then
   log_info "No interactive terminal attached; starting a shell instead of the menu."
-  log_info "Re-run with an interactive TTY (docker compose run --rm app) for the menu."
+  log_info "Re-run with an interactive TTY (docker compose run --service-ports --rm app) for the menu."
   exec bash
 fi
 

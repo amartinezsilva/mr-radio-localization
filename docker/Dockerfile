@@ -3,7 +3,8 @@
 FROM osrf/ros:jazzy-desktop-full
 
 # Install IGN Gazebo Harmonic
-RUN apt-get update && sudo apt-get install lsb-release wget gnupg nano inetutils-ping -y
+# fuse3 provides fusermount3 for running QGC; python3-flask backs the setup GUI (gui/app.py)
+RUN apt-get update && sudo apt-get install lsb-release wget gnupg nano inetutils-ping tmux fuse3 python3-flask -y
 RUN lsb_release -cs
 RUN dpkg --print-architecture
 RUN wget https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
@@ -26,7 +27,11 @@ RUN cd PX4-Autopilot/Tools/setup && ./ubuntu.sh --break-system-packages
 RUN cd /root/ && git clone https://github.com/koide3/small_gicp
 RUN cd /root/small_gicp && mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j4 && make install
 
-RUN cd && mkdir -p ros2_ws/src && cd ros2_ws/src && git clone https://github.com/robotics-upo/mr-radio-localization --recursive
+# Install the Micro XRCE-DDS Agent
+RUN cd /root/ && git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
+RUN cd /root/Micro-XRCE-DDS-Agent && mkdir build && cd build && cmake .. && make -j4 && make install && ldconfig /usr/local/lib/
+
+RUN cd && mkdir -p ros2_ws/src && cd ros2_ws/src && git clone https://github.com/amartinezsilva/mr-radio-localization --recursive
 SHELL ["/bin/bash", "-c"]
 RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_msgs.git && cd ~/ros2_ws
 RUN sudo apt-get install ros-jazzy-sophus -y
@@ -45,6 +50,12 @@ RUN echo "jazzy:jazzy" | chpasswd
 RUN adduser jazzy sudo & adduser jazzy dialout & adduser jazzy plugdev & echo Hi
 RUN usermod -aG sudo jazzy
 
+# Set up QGroundControl
+RUN mkdir -p /home/jazzy/Desktop && \
+    wget -O /home/jazzy/Desktop/QGroundControl-x86_64.AppImage \
+      https://github.com/mavlink/qgroundcontrol/releases/latest/download/QGroundControl-x86_64.AppImage && \
+    chmod +x /home/jazzy/Desktop/QGroundControl-x86_64.AppImage
+
 # Everything above was cloned while running as root. ros2_ws landed under
 # /root (via `cd` with no argument), while PX4-Autopilot landed at
 # /PX4-Autopilot (the base image's default WORKDIR is / , not /root, and
@@ -61,10 +72,7 @@ RUN mv /root/ros2_ws /home/jazzy/ros2_ws && \
 RUN cd /home/jazzy/ros2_ws && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install && \
     chown -R jazzy:jazzy /home/jazzy/ros2_ws
 
-# Guided entrypoint: prompts to run UWBPX4Sim's setup_simulator.sh or launch
-# the SITL demo. See docker-compose.yml for the config bind mounts that let
-# UWBPX4Sim/config and UWBPX4Sim/uwb_gazebo_plugin (params.yaml) be edited
-# from the host.
+# Guided entrypoint
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
