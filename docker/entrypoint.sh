@@ -8,6 +8,18 @@
 # the whole session; pick "Exit" to actually end it. Any other arguments are
 # exec'd directly, so `docker run <image> <cmd>` still works as a plain
 # override.
+#
+# setup.sh runs the container detached -- PID 1 idles (trapping SIGTERM so
+# "Exit" below can actually stop it; see setup.sh's PID1_IDLE_CMD comment
+# for why a bare `sleep infinity` wouldn't work), not this script -- and
+# joins it with `docker exec -it ... /entrypoint.sh`, so this script is
+# normally NOT PID 1. That's deliberate: it means the container (and
+# everything built/configured inside it) keeps running in the background
+# even if the terminal you joined from closes, and re-running setup.sh (or
+# that same `docker exec`) later reattaches to a fresh menu on the exact
+# same container/filesystem, picking up right where setup left off. "Exit"
+# (below) detects this and stops the whole container, not just the
+# attached session -- see there for how.
 
 set -e
 
@@ -100,7 +112,13 @@ world there, then re-run setup (option 1) to apply it.
 
 Tip: for QGroundControl/Gazebo windows to appear, run on the HOST
 first: xhost +local:docker (see docker-compose.yml's comments for the
-extra step Wayland/XWayland desktops need).${C_RESET}
+extra step Wayland/XWayland desktops need).
+
+Tip: this container keeps running in the background even if you close
+this terminal -- run setup.sh again (or docker exec -it <container>
+/entrypoint.sh) any time to get back to this menu with everything you
+configured still in place. Pick "Exit" below when you actually want to
+stop it.${C_RESET}
 EOF
 }
 
@@ -193,6 +211,26 @@ confirm_yes() {
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+do_exit() {
+  log_info "Exiting."
+  if [[ $$ -eq 1 ]]; then
+    # We ARE the container's main process (e.g. started via a plain
+    # `docker run`/`docker compose run --rm` instead of setup.sh's detached
+    # pattern) -- exiting normally already stops the container.
+    exit 0
+  fi
+  # We're a `docker exec`'d session inside a container whose real PID 1 is
+  # setup.sh's idle placeholder -- plain `exit` would only end
+  # THIS attached session and leave the container (and PID 1) running,
+  # which is right for closing your terminal but wrong for a deliberate
+  # Exit. `docker exec` shares the container's PID namespace, so PID 1 here
+  # really is the container's init process -- signal it directly to stop
+  # the whole container; no docker CLI access from inside needed.
+  log_info "Stopping the background container."
+  kill -TERM 1 2>/dev/null || true
+  exit 0
+}
+
 run_menu() {
   local choice
   print_welcome
@@ -203,7 +241,7 @@ run_menu() {
       1) run_setup || true ;;
       2) run_demo || true ;;
       3) bash || true; log_info "Shell closed. Back to the menu." ;;
-      4) log_info "Exiting."; exit 0 ;;
+      4) do_exit ;;
       *) echo "Invalid selection: '$choice'" ;;
     esac
   done
@@ -215,7 +253,7 @@ fi
 
 if [[ ! -t 0 ]]; then
   log_info "No interactive terminal attached; starting a shell instead of the menu."
-  log_info "Re-run with an interactive TTY (docker compose run --service-ports --rm app) for the menu."
+  log_info "Re-run with an interactive TTY (./setup.sh, or docker exec -it <container> /entrypoint.sh) for the menu."
   exec bash
 fi
 

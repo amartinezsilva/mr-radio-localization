@@ -25,48 +25,6 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 
 Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 
-## Cloning this repository
-
-Once the aforementioned dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
-
-```bash
-cd <ros_ws>/src
-git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
-cd ..
-colcon build
-```
-
-## PX4 / Gazebo SITL
-
-All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). If you want to use this setup, follow the instructions there to complete the setup first. This repository focuses on the localization stack.
-
-Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
-
-**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
-
-## Running with Docker
-
-A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repository's full stack pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
-
-```bash
-cd <ros_ws>/src
-git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
-cd mr-radio-localization/docker
-docker compose run --service-ports --build --rm app
-```
-
-The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `docker compose run --service-ports --rm app` drops you into a guided menu (`--service-ports` is needed for the setup GUI below to be reachable from your browser; `docker compose run`, unlike `up`, doesn't publish ports by default):
-
-1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available. Run this once, and again whenever you change the layout or plugin parameters.
-2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`. Once tmux attaches, open a new window (`Ctrl-b c`) and run `ros2 launch uwb_localization localization.launch.py` to see the relative localization estimate.
-3. **Open a shell**: skip the menu and get a plain shell in the container.
-
-You can also bypass the menu and run a one-off command directly, e.g. `docker compose run --rm app bash` or `docker compose run --rm app ros2 topic list`.
-
-`docker-compose.yml` bind-mounts `UWBPX4Sim/config/` (layout YAMLs), `UWBPX4Sim/uwb_gazebo_plugin/` (including `params.yaml`, the plugin's tuning file), and `UWBPX4Sim/worlds/` (custom Gazebo `.sdf` worlds) from the host into the container. Edit or add files there with your usual tools — including dropping in your own custom worlds — then re-run option 1 inside the container to apply the changes; no image rebuild needed.
-
-It also bind-mounts `UWBPX4Sim/ROS2/px4_sim_offboard/trajectories/` directly onto the offboard nodes' installed trajectory path, so dropping your own `trajectory_csv_file` CSV there (or editing an existing one) takes effect the next time the demo (re-)launches — no `setup_simulator.sh` re-run or rebuild needed for that one.
-
 ## Main components
 
 This repository contains two ROS2 packages:
@@ -80,6 +38,49 @@ This repository contains two ROS2 packages:
 
 * ```uwb_simulator```: includes a very basic odometry simulation node and a range measurement simulation node (no SITL, no radar) using generic odometry and a basic measurement model, meant for debugging purposes only.  The ```config``` folder in this package contains the parameter file for these two nodes.
 ![](images/basic_sim_diagram_simulation.drawio.png)
+
+## Running with Docker (Recommended)
+
+A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repository's full stack pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
+
+```bash
+cd <ros_ws>/src
+git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
+cd mr-radio-localization/docker
+./setup.sh
+```
+
+The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
+
+1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available. Run this once, and again whenever you change the layout or plugin parameters.
+2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`. Once tmux attaches, open a new window (`Ctrl-b c`) and run `ros2 launch uwb_localization localization.launch.py` to see the relative localization estimate.
+3. **Open a shell**: skip the menu and get a plain shell in the container.
+4. **Exit**: stops the container for good (see below — everything else, including closing your terminal, leaves it running).
+
+The container keeps running in the background even after you close the terminal, with everything from setup (the compiled PX4 binary, generated models, bridge config, `.setup_env`) still in place — closing your terminal is *not* the same as choosing "Exit". Run `./setup.sh` again any time (from any terminal) to reattach straight to the menu; it skips the build/launch prompt entirely once it finds the container already there. Only "Exit" from the menu (or `docker rm -f mr-radio-localization` from the host) actually stops it.
+
+`docker-compose.yml` bind-mounts `UWBPX4Sim/config/` (layout YAMLs), `UWBPX4Sim/uwb_gazebo_plugin/` (including `params.yaml`, the plugin's tuning file), and `UWBPX4Sim/worlds/` (custom Gazebo `.sdf` worlds) from the host into the container. Edit or add files there with your usual tools — including dropping in your own custom worlds — then re-run option 1 inside the container to apply the changes; no image rebuild needed.
+
+It also bind-mounts `UWBPX4Sim/ROS2/px4_sim_offboard/trajectories/` directly onto the offboard nodes' installed trajectory path, so dropping your own `trajectory_csv_file` CSV there (or editing an existing one) takes effect the next time the demo (re-)launches — no `setup_simulator.sh` re-run or rebuild needed for that one.
+
+## Build this repository locally
+
+Once the dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
+
+```bash
+cd <ros_ws>/src
+git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
+cd ..
+colcon build
+```
+
+## PX4 / Gazebo SITL
+
+All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). If you build this repository locally, follow the instructions there to complete the setup first. This is not needed if you user the recommended Docker setup.
+
+Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
+
+**Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
 
 
 ## Launch files
@@ -115,12 +116,6 @@ cmake ..
 sudo make install
 ```
 
-* Make sure you have set up the [ars_548](https://github.com/robotics-upo/ars548_ros) package following the instructions in the repo, particularly don't forget to install ``tclap`` which may cause compilation errors if it is not correctly set up.
-
-```
-sudo apt-get install libtclap-dev
-```
-
 * In Ubuntu 24.04 LTS and ROS 2 Jazzy, there is a [previously reported issue](https://discuss.px4.io/t/dds-faild-to-connect-ros2-jazzy/47966/3) that prevents the MicroXRCE Agent from connecting to the PX4 topics. This is because, when building the Micro-XRCE-DDS Agent on Ubuntu 24.04 (ROS 2 Jazzy) as part of the SITL setup, there may be a conflict between the locally built libraries (FastDDS/FastCDR) and the ones provided by the ROS 2 Jazzy default installation (``opt/ros``). The more straightforward workaround would be to tell your shell to look at your local build folders before the ROS folders by placing your paths at the beginning of the ``LD_LIBRARY_PATH``. To do it, find exactly where your libraries are located (replace ``path`` with the directory where you have cloned Micro-XRCE-DDS-Agent).
 
 ```
@@ -134,7 +129,7 @@ export LD_LIBRARY_PATH=/home/YOUR_USER/Micro-XRCE-DDS-Agent/build/temp_install/f
 
 Close the file and source it to apply the changes. After this, the agent should connect as expected and you should see the ROS 2 topics. 
 
-If you'd rather avoid this class of issue entirely, see [Running with Docker](#running-with-docker) above for a pre-built, known-working environment.
+If you'd rather avoid these potential issues entirely, see [Running with Docker](#running-with-docker) above for a pre-built, known-working environment.
 
 
 # Acknowledgements

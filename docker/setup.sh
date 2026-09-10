@@ -8,8 +8,15 @@
 # it instead of rebuilding), warns about low disk space and offers to
 # reclaim some first (the image alone is ~25GB, and a build has failed
 # mid-way from running out of disk before), builds, then -- unless told not
-# to -- also runs the X11 setup and `docker compose run` for you, so
-# nothing has to be copy-pasted.
+# to -- also runs the X11 setup and starts/reattaches to the container for
+# you, so nothing has to be copy-pasted.
+#
+# The container it starts is persistent, not throwaway: it runs detached
+# in the background under a fixed name and keeps running -- with
+# everything setup_simulator.sh built/configured still in place -- even
+# after you close the terminal you ran this from. Run this script again
+# any time to reattach to its menu; it only stops when you pick "Exit"
+# from that menu, or run `docker rm -f mr-radio-localization` yourself.
 
 set -euo pipefail
 
@@ -38,6 +45,18 @@ NO_CACHE=0
 RUN_AFTER=""      # "", "yes", "no"
 FORCE_ACTION=""   # "", "build", "launch"
 IMAGE="mr-radio-localization:jazzy"
+# Fixed name so re-running this script finds and reattaches to the same
+# container instead of creating a new one
+CONTAINER_NAME="mr-radio-localization"
+# What PID 1 runs while nothing else is: plain `sleep infinity` won't do --
+# a PID namespace's init process (PID 1) ignores any signal it hasn't
+# explicitly installed a handler for, INCLUDING SIGKILL, as a kernel safety
+# feature (see pid_namespaces(7)) -- so entrypoint.sh's "Exit" (which signals
+# PID 1 to stop the container) would silently do nothing against a bare
+# `sleep infinity`, verified empirically: `kill -KILL 1` against it from
+# inside the very same container left it running. Trapping SIGTERM here
+# makes PID 1 actually responsive to that signal.
+PID1_IDLE_CMD=(bash -c 'trap "exit 0" TERM; while true; do sleep 3600 & wait "$!"; done')
 MIN_FREE_GB=35   # a build has failed mid-export with as much as 24-28GB free in practice;
                  # successful builds in the same environment needed ~40GB+ of real headroom
 
@@ -72,6 +91,61 @@ require_command() {
     log_error "Missing required command: $1"
     exit 1
   fi
+}
+
+grant_x11() {
+  log_step "Granting container access to your X server"
+  if command -v xhost >/dev/null 2>&1; then
+    if xhost +local:docker >/dev/null 2>&1; then
+      log_ok "xhost +local:docker"
+    else
+      log_warn "xhost +local:docker failed (no X server / DISPLAY?)."
+      log_warn "GUI apps (QGroundControl, Gazebo) may not be able to open a window."
+    fi
+  else
+    log_warn "xhost not found -- skipping. GUI apps may not be able to open a window."
+  fi
+  # Extra requirement on Wayland/XWayland desktops: see docker-compose.yml's
+  # comments for why this is needed there and not on classic Xorg sessions.
+  if [[ -n "${DISPLAY:-}" ]]; then
+    local x11_num="${DISPLAY#*:}" x11_socket
+    x11_socket="/tmp/.X11-unix/X${x11_num%%.*}"
+    if [[ -S "$x11_socket" ]]; then
+      chmod 777 "$x11_socket" 2>/dev/null && log_ok "$x11_socket opened for the container" || true
+    fi
+  fi
+}
+
+fix_bind_mount_perms() {
+  log_step "Granting the container write access to bind-mounted config directories"
+  # The image's non-root user (jazzy) is baked in at a fixed uid/gid
+  # (1001:1001) that generally won't match the host user running this
+  # script -- so on the directories bind-mounted into the container (see
+  # docker-compose.yml's volumes:), jazzy is neither the owner nor in the
+  # owning group, and gets only the "other" permission bits. Host
+  # directories/files created by a normal `mkdir`/editor are typically
+  # mode 775/664, whose "other" bits lack write -- so the setup GUI's
+  # saves (layouts, params.yaml, presets) fail with PermissionError
+  # despite the volume mount itself working fine.
+  #
+  # Fixed the same way as the X11 socket permission in grant_x11: open up
+  # the specific host directories the container needs to write into,
+  # rather than trying to reconcile uids across host and container. o+rwX
+  # adds write for "other" (matching existing owner/group read-write)
+  # without touching execute bits on plain files, and applies recursively
+  # so both directories (for new files) and already-existing files
+  # (layout/params saves that overwrite in place) end up writable.
+  local d
+  for d in "$SCRIPT_DIR/../UWBPX4Sim/config" "$SCRIPT_DIR/../UWBPX4Sim/uwb_gazebo_plugin"; do
+    if [[ -d "$d" ]]; then
+      if (( DRY_RUN )); then
+        log_info "[DRY-RUN] chmod -R o+rwX $d"
+      else
+        chmod -R o+rwX "$d" && log_ok "$(basename "$d") writable by the container" || \
+          log_warn "Could not chmod $d -- the setup GUI may fail to save there."
+      fi
+    fi
+  done
 }
 
 print_usage() {
@@ -134,6 +208,41 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 log_ok "docker + docker compose available"
+
+# ---------------------------------------------------------------------------
+# 1a. Already running (or stopped) in the background? Skip straight to it.
+# ---------------------------------------------------------------------------
+
+# The whole point of the persistent container: once it exists, re-running
+# this script should get you straight back into its menu, not re-ask
+# whether to rebuild the image every time. Only an explicit override
+# (--rebuild/--launch/--no-cache/--no-run) skips this and falls through to
+# the normal image-check/build flow below.
+if [[ -z "$FORCE_ACTION" ]] && (( ! NO_CACHE )) && [[ "$RUN_AFTER" != "no" ]]; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+    grant_x11
+    fix_bind_mount_perms
+    log_step "Reattaching"
+    log_ok "$CONTAINER_NAME is already running -- your configuration is preserved."
+    if (( DRY_RUN )); then
+      log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
+      exit 0
+    fi
+    exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
+  elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+    grant_x11
+    fix_bind_mount_perms
+    log_step "Resuming the background container"
+    if (( DRY_RUN )); then
+      log_info "[DRY-RUN] docker start $CONTAINER_NAME"
+      log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
+      exit 0
+    fi
+    docker start "$CONTAINER_NAME" >/dev/null
+    log_ok "Resumed $CONTAINER_NAME -- your configuration is preserved."
+    exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Existing image?
@@ -255,38 +364,7 @@ fi # ACTION == build
 # 5. Bind-mount write permissions
 # ---------------------------------------------------------------------------
 
-log_step "Granting the container write access to bind-mounted config directories"
-# The image's non-root user (jazzy) is baked in at a fixed uid/gid (1001:1001)
-# that generally won't match the host user running this script -- so on the
-# directories bind-mounted into the container (see docker-compose.yml's
-# volumes:), jazzy is neither the owner nor in the owning group, and gets
-# only the "other" permission bits. Host directories/files created by a
-# normal `mkdir`/editor are typically mode 775/664, whose "other" bits lack
-# write -- so the setup GUI's saves (layouts, params.yaml, presets) fail
-# with PermissionError despite the volume mount itself working fine.
-#
-# Fixed the same way as the X11 socket permission below: open up the
-# specific host directories the container needs to write into, rather than
-# trying to reconcile uids across host and container. o+rwX adds write for
-# "other" (matching existing owner/group read-write) without touching
-# execute bits on plain files, and applies recursively so both directories
-# (for new files) and already-existing files (layout/params saves that
-# overwrite in place) end up writable. Done unconditionally (not just on a
-# fresh build) so it's also correct when launching an existing image.
-gui_write_dirs=(
-  "$SCRIPT_DIR/../UWBPX4Sim/config"
-  "$SCRIPT_DIR/../UWBPX4Sim/uwb_gazebo_plugin"
-)
-for d in "${gui_write_dirs[@]}"; do
-  if [[ -d "$d" ]]; then
-    if (( DRY_RUN )); then
-      log_info "[DRY-RUN] chmod -R o+rwX $d"
-    else
-      chmod -R o+rwX "$d" && log_ok "$(basename "$d") writable by the container" || \
-        log_warn "Could not chmod $d -- the setup GUI may fail to save there."
-    fi
-  fi
-done
+fix_bind_mount_perms
 
 # ---------------------------------------------------------------------------
 # 6. Run
@@ -294,12 +372,29 @@ done
 
 log_step "Done"
 
+# A rebuild just happened -- if the persistent container is still around
+# (running or stopped), it's stuck on the OLD image. Remove it so the step
+# below creates a fresh one from what was just built instead of silently
+# reattaching to stale code (getting here at all means step 1a's fast path
+# was skipped, i.e. --rebuild/--no-cache was explicit, so this is wanted).
+if [[ "$ACTION" == "build" ]] && ! (( DRY_RUN )); then
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+    log_info "Removing the previous $CONTAINER_NAME so the rebuilt image takes effect."
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
+fi
+
+already_running=0
+docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME" && already_running=1
+
 should_run=0
 if [[ "$RUN_AFTER" == "yes" ]]; then
   should_run=1
 elif [[ "$RUN_AFTER" == "no" ]]; then
   should_run=0
-elif confirm "Start the container now (xhost + docker compose run)?" y; then
+elif (( already_running )); then
+  should_run=1   # it's already up in the background -- just reattach, no need to ask
+elif confirm "Start the container now (xhost + attach to the background menu)?" y; then
   should_run=1
 fi
 
@@ -307,7 +402,9 @@ if (( ! should_run )); then
   echo
   echo "Next steps:"
   echo "  xhost +local:docker"
-  echo "  cd $SCRIPT_DIR && docker compose run --service-ports --rm app"
+  echo "  cd $SCRIPT_DIR && docker compose run -d --name $CONTAINER_NAME --service-ports app \\"
+  echo "    bash -c 'trap \"exit 0\" TERM; while true; do sleep 3600 & wait \"\$!\"; done'"
+  echo "  docker exec -it $CONTAINER_NAME /entrypoint.sh"
   echo
   echo "See docker-compose.yml's comments for the extra X11 socket permission"
   echo "step Wayland/XWayland desktops need for QGroundControl/Gazebo windows"
@@ -318,35 +415,38 @@ fi
 if (( DRY_RUN )); then
   log_info "[DRY-RUN] xhost +local:docker"
   log_info "[DRY-RUN] chmod 777 on the X11 socket matching \$DISPLAY (Wayland/XWayland hosts)"
-  log_info "[DRY-RUN] (cd \"$SCRIPT_DIR\" && exec docker compose run --service-ports --rm app)"
+  log_info "[DRY-RUN] ensure $CONTAINER_NAME exists and is running (create/resume as needed)"
+  log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
   exit 0
 fi
 
-log_step "Granting container access to your X server"
-if command -v xhost >/dev/null 2>&1; then
-  if xhost +local:docker >/dev/null 2>&1; then
-    log_ok "xhost +local:docker"
-  else
-    log_warn "xhost +local:docker failed (no X server / DISPLAY?)."
-    log_warn "GUI apps (QGroundControl, Gazebo) may not be able to open a window."
-  fi
-else
-  log_warn "xhost not found -- skipping. GUI apps may not be able to open a window."
-fi
-
-# Extra requirement on Wayland/XWayland desktops: see docker-compose.yml's
-# comments for why this is needed there and not on classic Xorg sessions.
-if [[ -n "${DISPLAY:-}" ]]; then
-  x11_num="${DISPLAY#*:}"
-  x11_socket="/tmp/.X11-unix/X${x11_num%%.*}"
-  if [[ -S "$x11_socket" ]]; then
-    chmod 777 "$x11_socket" 2>/dev/null && log_ok "$x11_socket opened for the container" || true
-  fi
-fi
+grant_x11
 
 log_step "Starting the container"
-cd "$SCRIPT_DIR"
-# --service-ports: `docker compose run` doesn't publish ports: by default
-# (unlike `up`) -- without it, the configuration GUI (option 1 in the
-# menu) is unreachable from the host browser even though it runs fine.
-exec docker compose run --service-ports --rm app
+# The container runs detached and persists in the background (not --rm) --
+# see the CONTAINER_NAME/PID1_IDLE_CMD comments near the top for why.
+# entrypoint.sh execs any non-"menu" command straight through, so
+# PID1_IDLE_CMD is the only job PID 1 has; the actual guided menu comes
+# from `docker exec`ing a *fresh* /entrypoint.sh below, attached with a
+# real tty, every time this script runs -- that's what makes runs after
+# the first skip straight past setup, and what survives closing this
+# terminal.
+if (( already_running )); then
+  log_ok "$CONTAINER_NAME is already running -- reattaching (your configuration is preserved)."
+elif docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+  docker start "$CONTAINER_NAME" >/dev/null
+  log_ok "Resumed $CONTAINER_NAME (your configuration is preserved)."
+else
+  # --service-ports: `docker compose run` doesn't publish ports: by
+  # default (unlike `up`) -- without it, the configuration GUI (option 1
+  # in the menu) is unreachable from the host browser even though it
+  # runs fine.
+  ( cd "$SCRIPT_DIR" && docker compose run -d --name "$CONTAINER_NAME" --service-ports app "${PID1_IDLE_CMD[@]}" ) >/dev/null
+  log_ok "Started $CONTAINER_NAME."
+  log_info "It stays up in the background from here on -- closing this terminal won't"
+  log_info "stop it. Run this script again any time to get back to its menu; pick"
+  log_info "\"Exit\" there when you actually want to stop it."
+fi
+
+log_step "Attaching"
+exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
