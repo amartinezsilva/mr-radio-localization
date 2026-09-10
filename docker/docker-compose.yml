@@ -35,6 +35,14 @@ services:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
       - UWB_GUI_PORT=${UWB_GUI_PORT:-5050}
+      # GPU rendering for Gazebo 
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # This host uses NVIDIA PRIME "on-demand" mode (`prime-select query`)
+      # -- the Intel iGPU renders by default and apps only use the NVIDIA
+      # GPU when they explicitly ask via these vars.
+      - __NV_PRIME_RENDER_OFFLOAD=1
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+      - __VK_LAYER_NV_optimus=NVIDIA_only
     ports:
       # setup_simulator.sh's browser-based configuration GUI (gui/app.py).
       # Passed into the container via UWB_GUI_PORT above too, so overriding
@@ -45,9 +53,7 @@ services:
       - ../UWBPX4Sim/uwb_gazebo_plugin:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/uwb_gazebo_plugin
       - ../UWBPX4Sim/worlds:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/worlds
       - ../UWBPX4Sim/gui:/home/jazzy/ros2_ws/src/mr-radio-localization/UWBPX4Sim/gui
-      # Mounted onto the *installed* path, not the source tree: this is transparent
-      # for the bundled trajectories and adds the ability to drop in new
-      # ones from the host without rebuilding.
+      # Mounted onto the installed path, not the source tree
       - ../UWBPX4Sim/ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     devices:
@@ -56,3 +62,12 @@ services:
       - SYS_ADMIN
     security_opt:
       - apparmor:unconfined
+    # NVIDIA GPU passthrough for Gazebo rendering (needs the host's NVIDIA
+    # driver + nvidia-container-toolkit installed)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

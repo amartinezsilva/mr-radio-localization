@@ -148,6 +148,22 @@ fix_bind_mount_perms() {
   done
 }
 
+attach_to_container() {
+  # Deliberately not `exec`'d, unlike a plain terminal step
+  local attach_exit=0
+  docker exec -it "$CONTAINER_NAME" /entrypoint.sh || attach_exit=$?
+  if (( attach_exit == 99 )); then
+    log_step "Removing the container"
+    if docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1; then
+      log_ok "Removed $CONTAINER_NAME."
+    else
+      log_warn "Could not remove $CONTAINER_NAME (already gone?)."
+    fi
+    exit 0
+  fi
+  exit "$attach_exit"
+}
+
 print_usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
@@ -213,11 +229,9 @@ log_ok "docker + docker compose available"
 # 1a. Already running (or stopped) in the background? Skip straight to it.
 # ---------------------------------------------------------------------------
 
-# The whole point of the persistent container: once it exists, re-running
+# Once container exists, re-running
 # this script should get you straight back into its menu, not re-ask
-# whether to rebuild the image every time. Only an explicit override
-# (--rebuild/--launch/--no-cache/--no-run) skips this and falls through to
-# the normal image-check/build flow below.
+# whether to rebuild the image every time.
 if [[ -z "$FORCE_ACTION" ]] && (( ! NO_CACHE )) && [[ "$RUN_AFTER" != "no" ]]; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
     grant_x11
@@ -225,22 +239,22 @@ if [[ -z "$FORCE_ACTION" ]] && (( ! NO_CACHE )) && [[ "$RUN_AFTER" != "no" ]]; t
     log_step "Reattaching"
     log_ok "$CONTAINER_NAME is already running -- your configuration is preserved."
     if (( DRY_RUN )); then
-      log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
+      log_info "[DRY-RUN] docker exec -it $CONTAINER_NAME /entrypoint.sh"
       exit 0
     fi
-    exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
+    attach_to_container
   elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
     grant_x11
     fix_bind_mount_perms
     log_step "Resuming the background container"
     if (( DRY_RUN )); then
       log_info "[DRY-RUN] docker start $CONTAINER_NAME"
-      log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
+      log_info "[DRY-RUN] docker exec -it $CONTAINER_NAME /entrypoint.sh"
       exit 0
     fi
     docker start "$CONTAINER_NAME" >/dev/null
     log_ok "Resumed $CONTAINER_NAME -- your configuration is preserved."
-    exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
+    attach_to_container
   fi
 fi
 
@@ -416,7 +430,7 @@ if (( DRY_RUN )); then
   log_info "[DRY-RUN] xhost +local:docker"
   log_info "[DRY-RUN] chmod 777 on the X11 socket matching \$DISPLAY (Wayland/XWayland hosts)"
   log_info "[DRY-RUN] ensure $CONTAINER_NAME exists and is running (create/resume as needed)"
-  log_info "[DRY-RUN] exec docker exec -it $CONTAINER_NAME /entrypoint.sh"
+  log_info "[DRY-RUN] docker exec -it $CONTAINER_NAME /entrypoint.sh"
   exit 0
 fi
 
@@ -449,4 +463,4 @@ else
 fi
 
 log_step "Attaching"
-exec docker exec -it "$CONTAINER_NAME" /entrypoint.sh
+attach_to_container

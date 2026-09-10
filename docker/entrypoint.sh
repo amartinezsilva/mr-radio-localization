@@ -211,6 +211,13 @@ confirm_yes() {
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+# Exit code do_exit uses to ask setup.sh to actually remove the container
+# (rather than just stop it) after this attached session ends -- chosen to
+# not collide with a plain signal death (128+signal: 130 SIGINT, 137
+# SIGKILL, 143 SIGTERM) or common shell error codes (126/127). setup.sh's
+# final `docker exec -it ... /entrypoint.sh` checks for this exact value.
+REMOVE_EXIT_CODE=99
+
 do_exit() {
   log_info "Exiting."
   if [[ $$ -eq 1 ]]; then
@@ -220,13 +227,22 @@ do_exit() {
     exit 0
   fi
   # We're a `docker exec`'d session inside a container whose real PID 1 is
-  # setup.sh's idle placeholder -- plain `exit` would only end
-  # THIS attached session and leave the container (and PID 1) running,
-  # which is right for closing your terminal but wrong for a deliberate
-  # Exit. `docker exec` shares the container's PID namespace, so PID 1 here
+  # setup.sh's idle placeholder -- plain `exit` would only end THIS
+  # attached session and leave the container (and PID 1) running, which is
+  # right for closing your terminal but wrong for a deliberate Exit.
+  # `docker exec` shares the container's PID namespace, so PID 1 here
   # really is the container's init process -- signal it directly to stop
   # the whole container; no docker CLI access from inside needed.
-  log_info "Stopping the background container."
+  #
+  # Stopping is not the same as removing it, though (see setup.sh's
+  # CONTAINER_NAME comment) -- ask which one they actually want. 
+  if confirm_yes "Remove the container completely (discards this setup) instead of just stopping it?"; then
+    log_info "Stopping the background container for removal."
+    # Deliberately fire-and-forget, not waiting for PID 1 to actually die
+    kill -TERM 1 2>/dev/null || true
+    exit "$REMOVE_EXIT_CODE"
+  fi
+  log_info "Stopping the background container (setup is preserved)."
   kill -TERM 1 2>/dev/null || true
   exit 0
 }
