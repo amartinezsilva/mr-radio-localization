@@ -64,10 +64,6 @@ The container keeps running in the background even after you close the terminal,
 
 Only "Exit" from the menu (or `docker stop mr-radio-localization` from the host) stops it. Answering **N** (or just pressing Enter) at its removal prompt only stops it -- the container's filesystem, including everything setup configured, is untouched, and `./setup.sh` (or `docker start`) resumes it exactly as it was, still ticked as configured. Answering **y** there removes it completely instead, equivalent to `docker rm -f mr-radio-localization` -- the next `./setup.sh` run then creates a genuinely fresh one.
 
-`docker-compose.yml` bind-mounts `UWBPX4Sim/config/` (layout YAMLs), `UWBPX4Sim/uwb_gazebo_plugin/` (including `params.yaml`, the plugin's tuning file), and `UWBPX4Sim/worlds/` (custom Gazebo `.sdf` worlds) from the host into the container. Edit or add files there with your usual tools — including dropping in your own custom worlds — then re-run option 1 inside the container to apply the changes; no image rebuild needed.
-
-It also bind-mounts `UWBPX4Sim/ROS2/px4_sim_offboard/trajectories/` directly onto the offboard nodes' installed trajectory path, so dropping your own `trajectory_csv_file` CSV there (or editing an existing one) takes effect the next time the demo (re-)launches — no `setup_simulator.sh` re-run or rebuild needed for that one.
-
 ## Building this repository locally
 
 Once the dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
