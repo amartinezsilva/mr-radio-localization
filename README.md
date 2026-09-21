@@ -65,7 +65,7 @@ Only "Exit" from the menu (or `docker stop mr-radio-localization` from the host)
 
 It also bind-mounts `UWBPX4Sim/ROS2/px4_sim_offboard/trajectories/` directly onto the offboard nodes' installed trajectory path, so dropping your own `trajectory_csv_file` CSV there (or editing an existing one) takes effect the next time the demo (re-)launches — no `setup_simulator.sh` re-run or rebuild needed for that one.
 
-## Build this repository locally
+## Building this repository locally
 
 Once the dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
 
@@ -133,6 +133,9 @@ Close the file and source it to apply the changes. After this, the agent should 
 
 If you'd rather avoid these potential issues entirely, see [Running with Docker](#running-with-docker) above for a pre-built, known-working environment.
 
+# Disclaimer on AI usage
+
+The work is in this repository is part of a multiple year research project backed with academic works and documented bibliography. While the problem formulation, system architecture and algorithms implemented are original work, it is important to disclose that AI agents have been used in the later stages to improve code readability, efficiency and polish the interfaces (p.e., the implementation of the docker container framework and the implementation and setup of the simulator plugin UWBPX4Sim have been aided by coding agents). We are open to any feedback from the users and will happily note your concerns and tips to make this code better =).
 
 # Acknowledgements
 
