@@ -135,7 +135,7 @@ If you'd rather avoid these potential issues entirely, see [Running with Docker]
 
 # Disclaimer on AI usage
 
-The work is in this repository is part of a multiple year research project backed with academic works and documented bibliography. While the problem formulation, system architecture and algorithms implemented are original work, it is important to disclose that AI agents have been used in the later stages to improve code readability, efficiency and polish the interfaces (p.e., the implementation of the docker container framework and the implementation and setup of the simulator plugin UWBPX4Sim have been aided by coding agents). We are open to any feedback from the users and will happily note your concerns and tips to make this code better =).
+The work is in this repository is part of a multiple year research project backed with academic works and documented bibliography. While the problem formulation, system architecture and algorithms implemented are original work, it is important to disclose that AI agents have been used in the later stages to improve code readability, efficiency and polish the interfaces (p.e., the implementation of the docker container framework and the implementation and setup of the simulator plugin UWBPX4Sim have been aided by coding agents). We are open to any feedback from the users and will happily note your concerns and tips to make this code better.
 
 # Acknowledgements
 
