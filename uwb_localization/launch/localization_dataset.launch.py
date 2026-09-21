@@ -5,6 +5,8 @@ from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import FrontendLaunchDescriptionSource
 from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
@@ -12,9 +14,15 @@ def generate_launch_description():
     package_dir = get_package_share_directory('uwb_localization')
     config = os.path.join(package_dir, 'config', 'params_dataset.yaml')
 
-    # Put here the path to the simulation bag you want to use, inside the  /bags folder
-    bag_name = "experiment1_gt_v2_0/experiment1_gt_v2_0.mcap"
-    path_to_bag = os.path.join(package_dir, 'bags', bag_name)
+    # Path to the bag to play, relative to uwb_localization/bags/. Override
+    # with `ros2 launch uwb_localization localization_dataset.launch.py
+    # bag_name:=...` instead of editing this file.
+    bag_name_arg = DeclareLaunchArgument(
+        'bag_name',
+        default_value='experiment1_gt_v2_0/experiment1_gt_v2_0.mcap',
+        description='Path to the bag to play, relative to uwb_localization/bags/'
+    )
+    path_to_bag = PathJoinSubstitution([package_dir, 'bags', LaunchConfiguration('bag_name')])
 
     node1 = Node(
                 package='uwb_localization',
@@ -86,6 +94,7 @@ def generate_launch_description():
     )
 
     nodes_to_execute = [
+        bag_name_arg,
         node1,
         node2,
         node3,

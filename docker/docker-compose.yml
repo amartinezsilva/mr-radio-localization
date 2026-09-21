@@ -49,7 +49,7 @@ services:
       # it on the host changes both what's published and what the GUI binds to.
       - "${UWB_GUI_PORT:-5050}:${UWB_GUI_PORT:-5050}"
     volumes:
-      # Container-side paths now match UWBPX4Sim's own top-level location
+      # Container-side paths match UWBPX4Sim's own top-level location
       # in the base image (~/ros2_ws/src/UWBPX4Sim, not nested under this
       # repo) -- the host-side paths are unchanged, still this repo's own
       # UWBPX4Sim submodule checkout.
@@ -59,6 +59,15 @@ services:
       - ../UWBPX4Sim/gui:/home/jazzy/ros2_ws/src/UWBPX4Sim/gui
       # Mounted onto the installed path, not the source tree
       - ../UWBPX4Sim/ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
+      # Same reasoning as the trajectories mount above: drop
+      # your own recorded rosbags into uwb_localization/bags/ on the host
+      # to run the localization algorithm against them.
+      - ../uwb_localization/bags:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/bags
+      # Same pattern again: uwb_localization's launch files resolve
+      # params_sim.yaml/params_dataset.yaml via get_package_share_directory,
+      # so edits to uwb_localization/config/ on the host take effect without
+      # rebuilding the image.
+      - ../uwb_localization/config:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/config
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     devices:
       - /dev/fuse

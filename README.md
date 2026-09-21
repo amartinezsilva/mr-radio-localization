@@ -64,6 +64,8 @@ The container keeps running in the background even after you close the terminal,
 
 Only "Exit" from the menu (or `docker stop mr-radio-localization` from the host) stops it. Answering **N** (or just pressing Enter) at its removal prompt only stops it -- the container's filesystem, including everything setup configured, is untouched, and `./setup.sh` (or `docker start`) resumes it exactly as it was, still ticked as configured. Answering **y** there removes it completely instead, equivalent to `docker rm -f mr-radio-localization` -- the next `./setup.sh` run then creates a genuinely fresh one.
 
+`uwb_localization/bags/` is bind-mounted into the container, so dropping your own recorded rosbags there on the host makes them available for `localization_dataset.launch.py`/`localization.launch.py` to run against, without rebuilding the image. `uwb_localization/config/` is bind-mounted too, so tuning `params_sim.yaml`/`params_dataset.yaml` on the host takes effect the next time you launch, also without rebuilding.
+
 ## Building this repository locally
 
 Once the dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 

@@ -5,6 +5,8 @@ from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import FrontendLaunchDescriptionSource
 from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
@@ -14,10 +16,16 @@ def generate_launch_description():
     config = os.path.join(package_dir, 'config', 'params_sim.yaml')
     rviz_config = os.path.join(package_dir, 'rviz', 'config.rviz')
 
-    # Put here the path to the simulation bag you want to use, inside the  /bags folder
-    bag_name = "dataset_lemniscate"
-    path_to_bag = os.path.join(package_dir, 'bags', bag_name)
-    
+    # Path to the bag to play, relative to uwb_localization/bags/. Override
+    # with `ros2 launch uwb_localization localization.launch.py bag_name:=...`
+    # instead of editing this file.
+    bag_name_arg = DeclareLaunchArgument(
+        'bag_name',
+        default_value='dataset_lemniscate',
+        description='Path to the bag to play, relative to uwb_localization/bags/'
+    )
+    path_to_bag = PathJoinSubstitution([package_dir, 'bags', LaunchConfiguration('bag_name')])
+
     node1 = Node(
                 package='uwb_localization',
                 executable='global_opt_node_eliko',
@@ -46,6 +54,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    nodes_to_execute = [node1, node2, bag_full]
+    nodes_to_execute = [bag_name_arg, node1, node2, rviz, bag_full]
     
     return LaunchDescription(nodes_to_execute)
