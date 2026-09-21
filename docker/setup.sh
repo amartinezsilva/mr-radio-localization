@@ -2,14 +2,21 @@
 #
 # setup.sh - Build (and optionally launch) the mr-radio-localization image.
 #
+# This image is built FROM uwbpx4sim:jazzy (the standalone UWBPX4Sim
+# simulator image -- see ../../UWBPX4Sim/docker/), adding only the
+# radar/localization-specific dependencies and this repo's own ROS 2
+# packages on top. If that base image doesn't exist locally yet, this
+# script builds it first automatically (via the sibling setup.sh) before
+# building this one -- see the "Base image" step below.
+#
 # Wraps `docker compose build` so you don't need to remember the compose
 # invocation or run it from this exact directory. Checks Docker/Compose are
 # available, tells you about any existing image (and lets you just launch
 # it instead of rebuilding), warns about low disk space and offers to
-# reclaim some first (the image alone is ~25GB, and a build has failed
-# mid-way from running out of disk before), builds, then -- unless told not
-# to -- also runs the X11 setup and starts/reattaches to the container for
-# you, so nothing has to be copy-pasted.
+# reclaim some first (a build has failed mid-way from running out of disk
+# before), builds, then -- unless told not to -- also runs the X11 setup
+# and starts/reattaches to the container for you, so nothing has to be
+# copy-pasted.
 #
 # The container it starts is persistent, not throwaway: it runs detached
 # in the background under a fixed name and keeps running -- with
@@ -305,6 +312,42 @@ fi
 if [[ "$ACTION" == "build" ]]; then
 
 # ---------------------------------------------------------------------------
+# 2a. Base image needed?
+# ---------------------------------------------------------------------------
+
+# This image is built FROM uwbpx4sim:jazzy (see Dockerfile), which must
+# already exist locally -- Docker has no "build this base first if it's
+# missing" mechanism of its own. Just the (cheap) check + confirmation
+# here, before the disk-space check below -- so its warning can say
+# whether one image or two are about to be built -- with the actual base
+# build deferred until after that check, so a low-space warning/cancel
+# happens before either build starts, not after the first one has already
+# eaten the disk. An explicit --no-cache means "rebuild everything", so it
+# forces this too, even if the base image already exists -- otherwise
+# --no-cache here would silently leave a stale base image untouched while
+# rebuilding only this image's own layers on top of it.
+BASE_IMAGE="uwbpx4sim:jazzy"
+NEED_BASE_BUILD=0
+if (( NO_CACHE )) || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+  if (( NO_CACHE )); then
+    log_step "UWBPX4Sim base image"
+    log_info "$BASE_IMAGE will be rebuilt too (--no-cache)."
+    NEED_BASE_BUILD=1
+  else
+    log_step "UWBPX4Sim base image"
+    log_info "$BASE_IMAGE not found locally -- this image is built FROM it, so it's needed."
+    if confirm "Build the UWBPX4Sim base image now (~15-30 min, separate from this image's own build)?" y; then
+      NEED_BASE_BUILD=1
+    else
+      log_error "Can't build $IMAGE without $BASE_IMAGE. Build it yourself first with:"
+      log_error "  ( cd \"$SCRIPT_DIR/../UWBPX4Sim/docker\" && ./setup.sh --no-run )"
+      log_error "or re-run this script and answer yes."
+      exit 1
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Disk space
 # ---------------------------------------------------------------------------
 
@@ -314,9 +357,15 @@ mount_point="$(df -P "$SCRIPT_DIR" | awk 'NR==2 {print $6}')"
 log_info "Free space on $mount_point: ${avail_gb}GB"
 
 if (( avail_gb < MIN_FREE_GB )); then
-  log_warn "Less than ${MIN_FREE_GB}GB free. A full build needs real headroom on top of"
-  log_warn "the built image's own size (~25GB) -- it has failed mid-build from running"
-  log_warn "out of disk before."
+  if (( NEED_BASE_BUILD )); then
+    log_warn "Less than ${MIN_FREE_GB}GB free. Building both the UWBPX4Sim base image and"
+    log_warn "this one needs real headroom on top of the base image's own size (~20GB) --"
+    log_warn "a build has failed mid-build from running out of disk before."
+  else
+    log_warn "Less than ${MIN_FREE_GB}GB free. A full build needs real headroom on top of"
+    log_warn "the built image's own size -- it has failed mid-build from running"
+    log_warn "out of disk before."
+  fi
 
   running="$(docker ps -a --filter "ancestor=$IMAGE" -q 2>/dev/null || true)"
   if [[ -n "$running" ]]; then
@@ -345,6 +394,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3a. Build the base image, if needed
+# ---------------------------------------------------------------------------
+
+if (( NEED_BASE_BUILD )); then
+  if (( NO_CACHE )); then
+    log_step "Rebuilding the UWBPX4Sim base image (--no-cache)"
+  else
+    log_step "Building the UWBPX4Sim base image first ($BASE_IMAGE not found locally)"
+  fi
+  base_setup="$SCRIPT_DIR/../UWBPX4Sim/docker/setup.sh"
+  if [[ ! -f "$base_setup" ]]; then
+    log_error "Can't find $base_setup to build the base image."
+    log_error "Check that the UWBPX4Sim submodule is checked out (git submodule update --init)."
+    exit 1
+  fi
+  # --no-run: just build, don't also start a uwbpx4sim container -- this
+  # script wants the image, not a running instance of it.
+  base_args=(--no-run -y)
+  (( NO_CACHE )) && base_args+=(--no-cache)
+  if (( DRY_RUN )); then
+    log_info "[DRY-RUN] ( cd \"$(dirname "$base_setup")\" && ./setup.sh ${base_args[*]} )"
+  else
+    ( cd "$(dirname "$base_setup")" && ./setup.sh "${base_args[@]}" )
+    log_ok "Base image built: $BASE_IMAGE"
+  fi
+else
+  log_info "Base image $BASE_IMAGE already present -- not rebuilding it (pass --no-cache to force that too)."
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Build
 # ---------------------------------------------------------------------------
 
@@ -355,12 +434,16 @@ log_step "Building the image"
 # --build-arg CACHEBUST: a `RUN git clone` layer only invalidates when this
 # instruction's own text changes, not when the remote it clones actually
 # moves -- so without this, a normal (non---no-cache) rebuild would silently
-# keep serving a stale checkout of mr-radio-localization/UWBPX4Sim even after
-# new commits land. Passing a fresh value every time busts just that layer
-# (and everything after it) without paying for a full --no-cache rebuild of
-# the much more expensive earlier layers (base image, PX4-Autopilot,
-# small_gicp, Micro-XRCE-DDS-Agent). --no-cache still forces everything, for
-# when the earlier layers themselves need a clean rebuild.
+# keep serving a stale checkout of mr-radio-localization even after new
+# commits land. Passing a fresh value every time busts just that layer (and
+# everything after it) without paying for a full --no-cache rebuild of the
+# more expensive earlier layers in *this* Dockerfile (apt installs,
+# small_gicp, ars548_ros, 4D-Radar-Odom) -- and, since this image is FROM
+# uwbpx4sim:jazzy, without ever touching that base image's own layers
+# (PX4-Autopilot, Gazebo, etc.) at all. --no-cache still forces everything
+# in this Dockerfile, for when those earlier layers themselves need a
+# clean rebuild (it does not rebuild the base image -- see --no-cache's
+# separate handling for that above, at the base-image step).
 build_arg=(--build-arg "CACHEBUST=$(date +%s)")
 compose_args=(--progress=plain build "${build_arg[@]}" app)
 (( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "${build_arg[@]}" app)

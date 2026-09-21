@@ -43,6 +43,8 @@ This repository contains two ROS2 packages:
 
 A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repository's full stack pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
 
+This image is layered: it's built `FROM` the standalone [UWBPX4Sim](https://github.com/amartinezsilva/UWBPX4Sim) simulator image (PX4 SITL, Gazebo, the UWB plugin -- see [its own README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md#running-with-docker)), adding only this repo's radar/localization dependencies and ROS 2 packages on top. You don't need to build that base image yourself first -- `./setup.sh` below builds it automatically (asking first) if it isn't already present locally.
+
 ```bash
 cd <ros_ws>/src
 git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
@@ -50,12 +52,13 @@ cd mr-radio-localization/docker
 ./setup.sh
 ```
 
-The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (20-30+ minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
+The first build compiles the UWBPX4Sim base image plus this repo's own workspace, so it can take a while (30-45+ minutes depending on your machine, mostly the one-time base image); subsequent runs reuse the cached images and start instantly, and rebuilding after a change to this repo's own code no longer touches the PX4/Gazebo layers at all. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
 
 1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available. Run this once, and again whenever you change the layout or plugin parameters.
-2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`. Once tmux attaches, open a new window (`Ctrl-b c`) and run `ros2 launch uwb_localization localization.launch.py` to see the relative localization estimate.
-3. **Open a shell**: skip the menu and get a plain shell in the container.
-4. **Exit**: stops the container, and asks whether to remove it completely instead (`[y/N]`, default just stops it) -- see below for what each choice actually does. Everything else, including closing your terminal, leaves it running.
+2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`.
+3. **Launch localization**: runs `ros2 launch uwb_localization localization.launch.py` in a new tmux window alongside the running simulation, to see the relative localization estimate. Needs the simulation (option 2) already running.
+4. **Open a shell**: skip the menu and get a plain shell in the container.
+5. **Exit**: stops the container, and asks whether to remove it completely instead (`[y/N]`, default just stops it) -- see below for what each choice actually does. Everything else, including closing your terminal, leaves it running.
 
 The container keeps running in the background even after you close the terminal, with everything from setup (the compiled PX4 binary, generated models, bridge config, `.setup_env`) still in place — closing your terminal is *not* the same as choosing "Exit". Run `./setup.sh` again any time (from any terminal) to reattach straight to the menu; it skips the build/launch prompt entirely once it finds the container already there.
 
