@@ -848,14 +848,17 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
     }
 
     // For the starting nodes, add the prior residual blocks if they are not yet optimized and fixed.
+    // Bind by reference: the prior must act on the parameter block stored in the map. A copy
+    // would add a separate, unconnected block (leaving the trajectory's gauge free) that is
+    // also destroyed at the end of this scope, before Solve() reads it.
     if (!posegraph::isNodeFixedKF(agv_id_, 0, max_keyframes_, min_keyframes_)){
-        auto first_node_agv = agv_map[0];
+        auto& first_node_agv = agv_map[0];
         ceres::CostFunction* prior_cost_agv = PriorCostFunction::Create(prior_agv_.pose, first_node_agv.roll, first_node_agv.pitch, prior_agv_.covariance);
         problem.AddResidualBlock(prior_cost_agv, nullptr, first_node_agv.state.data());
     }
 
     if (!posegraph::isNodeFixedKF(uav_id_, 0, max_keyframes_, min_keyframes_)) {    
-        auto first_node_uav = uav_map[0];
+        auto& first_node_uav = uav_map[0];
         ceres::CostFunction* prior_cost_uav = PriorCostFunction::Create(prior_uav_.pose, first_node_uav.roll, first_node_uav.pitch, prior_uav_.covariance);
         problem.AddResidualBlock(prior_cost_uav, nullptr, first_node_uav.state.data());
     }
