@@ -1,13 +1,26 @@
 #!/bin/bash
 #
-# setup.sh - Build (and optionally launch) the mr-radio-localization image.
+# setup.sh - Build (and optionally launch) an mr-radio-localization image.
 #
-# This image is built FROM uwbpx4sim:jazzy (the standalone UWBPX4Sim
-# simulator image -- see ../../UWBPX4Sim/docker/), adding only the
-# radar/localization-specific dependencies and this repo's own ROS 2
-# packages on top. If that base image doesn't exist locally yet, this
-# script builds it first automatically (via the sibling setup.sh) before
-# building this one -- see the "Base image" step below.
+# Two variants (see docker-compose.yml):
+#
+#   standalone (default)  mr-radio-localization:jazzy-standalone
+#       The localization stack only, FROM osrf/ros:jazzy-desktop -- for
+#       running against your own rosbags. Doesn't need UWBPX4Sim at all.
+#
+#   --sim                 mr-radio-localization:jazzy-sim
+#       Built FROM uwbpx4sim:jazzy (the UWBPX4Sim simulator image), adding
+#       the localization stack on top. If that base image doesn't exist
+#       locally yet, this script builds it first automatically (via
+#       UWBPX4Sim's own setup.sh) -- see the "Base image" step below.
+#
+#       UWBPX4Sim is a separate repository, not a submodule of this one.
+#       Its host checkout is taken from $UWBPX4SIM_DIR, defaulting to a
+#       sibling of this repo (<ros_ws>/src/UWBPX4Sim -- the same place a
+#       local, non-Docker setup puts it, so both setups can share one
+#       checkout). If it isn't there, this script offers to clone it. It's
+#       needed both to build the base image and to bind-mount into the
+#       container (see docker-compose.yml).
 #
 # Wraps `docker compose build` so you don't need to remember the compose
 # invocation or run it from this exact directory. Checks Docker/Compose are
@@ -51,10 +64,11 @@ DRY_RUN=0
 NO_CACHE=0
 RUN_AFTER=""      # "", "yes", "no"
 FORCE_ACTION=""   # "", "build", "launch"
-IMAGE="mr-radio-localization:jazzy"
-# Fixed name so re-running this script finds and reattaches to the same
-# container instead of creating a new one
-CONTAINER_NAME="mr-radio-localization"
+VARIANT="standalone"   # "standalone" or "sim" -- see the header
+# IMAGE, CONTAINER_NAME, SERVICE and MIN_FREE_GB are set per variant once
+# the arguments are parsed. The container name is fixed (per variant) so
+# re-running this script finds and reattaches to the same container
+# instead of creating a new one.
 # What PID 1 runs while nothing else is: plain `sleep infinity` won't do --
 # a PID namespace's init process (PID 1) ignores any signal it hasn't
 # explicitly installed a handler for, INCLUDING SIGKILL, as a kernel safety
@@ -64,8 +78,13 @@ CONTAINER_NAME="mr-radio-localization"
 # inside the very same container left it running. Trapping SIGTERM here
 # makes PID 1 actually responsive to that signal.
 PID1_IDLE_CMD=(bash -c 'trap "exit 0" TERM; while true; do sleep 3600 & wait "$!"; done')
-MIN_FREE_GB=35   # a build has failed mid-export with as much as 24-28GB free in practice;
-                 # successful builds in the same environment needed ~40GB+ of real headroom
+# Under WSL2 (Docker Desktop on Windows), layer on the override that routes
+# Gazebo's OpenGL to the NVIDIA GPU via Mesa's d3d12 driver -- see
+# docker-compose.wsl.yml. Exported so every `docker compose` below picks it up.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  export COMPOSE_FILE="docker-compose.yml:docker-compose.wsl.yml"
+fi
+UWBPX4SIM_REPO_URL="https://github.com/amartinezsilva/UWBPX4Sim.git"
 
 # Log helpers keep the literal "[INFO]"/"[WARN]"/etc. tags uncolored and
 # contiguous (color wraps the whole line from outside), so anything that
@@ -107,7 +126,7 @@ grant_x11() {
       log_ok "xhost +local:docker"
     else
       log_warn "xhost +local:docker failed (no X server / DISPLAY?)."
-      log_warn "GUI apps (QGroundControl, Gazebo) may not be able to open a window."
+      log_warn "GUI apps (Gazebo, RViz) may not be able to open a window."
     fi
   else
     log_warn "xhost not found -- skipping. GUI apps may not be able to open a window."
@@ -123,36 +142,72 @@ grant_x11() {
   fi
 }
 
+is_sim() { [[ "$VARIANT" == "sim" ]]; }
+
+resolve_uwbpx4sim_dir() {
+  # Locates (or offers to clone) the host UWBPX4Sim checkout, and exports
+  # UWBPX4SIM_DIR as an absolute path so docker-compose.yml's volumes:
+  # interpolate it no matter which directory compose runs from.
+  log_step "Locating the UWBPX4Sim checkout"
+  local dir="${UWBPX4SIM_DIR:-$SCRIPT_DIR/../../UWBPX4Sim}"
+  if [[ ! -d "$dir" ]]; then
+    log_warn "UWBPX4Sim not found at $dir."
+    log_info "It's a separate repository (not a submodule): this image is built FROM its"
+    log_info "Docker image, and the checkout is bind-mounted into the container."
+    log_info "Set UWBPX4SIM_DIR to use an existing checkout somewhere else."
+    if confirm "Clone $UWBPX4SIM_REPO_URL into $dir now?" y; then
+      if (( DRY_RUN )); then
+        log_info "[DRY-RUN] git clone --recurse-submodules $UWBPX4SIM_REPO_URL $dir"
+        UWBPX4SIM_DIR="$dir"
+        export UWBPX4SIM_DIR
+        return
+      fi
+      require_command git
+      git clone --recurse-submodules "$UWBPX4SIM_REPO_URL" "$dir"
+    else
+      log_error "Can't continue without a UWBPX4Sim checkout. Either clone it yourself:"
+      log_error "  git clone $UWBPX4SIM_REPO_URL $dir"
+      log_error "or point this script at an existing one: UWBPX4SIM_DIR=/path/to/UWBPX4Sim $0"
+      exit 1
+    fi
+  fi
+  if [[ ! -f "$dir/docker/setup.sh" ]]; then
+    log_error "$dir doesn't look like a UWBPX4Sim checkout (no docker/setup.sh)."
+    exit 1
+  fi
+  UWBPX4SIM_DIR="$(cd "$dir" && pwd)"
+  export UWBPX4SIM_DIR
+  log_ok "UWBPX4Sim: $UWBPX4SIM_DIR"
+}
+
 fix_bind_mount_perms() {
-  log_step "Granting the container write access to bind-mounted config directories"
+  # Only the SITL image bind-mounts the UWBPX4Sim checkout; the standalone
+  # one mounts just uwb_localization/bags and config, which it only reads.
+  is_sim || return 0
+  log_step "Granting the container write access to the bind-mounted UWBPX4Sim checkout"
   # The image's non-root user (jazzy) is baked in at a fixed uid/gid
   # (1001:1001) that generally won't match the host user running this
-  # script -- so on the directories bind-mounted into the container (see
-  # docker-compose.yml's volumes:), jazzy is neither the owner nor in the
-  # owning group, and gets only the "other" permission bits. Host
-  # directories/files created by a normal `mkdir`/editor are typically
-  # mode 775/664, whose "other" bits lack write -- so the setup GUI's
-  # saves (layouts, params.yaml, presets) fail with PermissionError
-  # despite the volume mount itself working fine.
+  # script -- so on the UWBPX4Sim checkout bind-mounted into the container
+  # (see docker-compose.yml's volumes:), jazzy is neither the owner nor in
+  # the owning group, and gets only the "other" permission bits. Host
+  # files created by a normal git clone/editor are typically mode 775/664,
+  # whose "other" bits lack write -- so the setup GUI's saves (layouts,
+  # presets), .setup_env, and the generated models/bridge config fail with
+  # PermissionError despite the volume mount itself working fine.
   #
-  # Fixed the same way as the X11 socket permission in grant_x11: open up
-  # the specific host directories the container needs to write into,
-  # rather than trying to reconcile uids across host and container. o+rwX
-  # adds write for "other" (matching existing owner/group read-write)
-  # without touching execute bits on plain files, and applies recursively
-  # so both directories (for new files) and already-existing files
-  # (layout/params saves that overwrite in place) end up writable.
-  local d
-  for d in "$SCRIPT_DIR/../UWBPX4Sim/config" "$SCRIPT_DIR/../UWBPX4Sim/uwb_gazebo_plugin"; do
-    if [[ -d "$d" ]]; then
-      if (( DRY_RUN )); then
-        log_info "[DRY-RUN] chmod -R o+rwX $d"
-      else
-        chmod -R o+rwX "$d" && log_ok "$(basename "$d") writable by the container" || \
-          log_warn "Could not chmod $d -- the setup GUI may fail to save there."
-      fi
+  # Fixed the same way as the X11 socket permission in grant_x11 (and as
+  # UWBPX4Sim's own setup.sh does): open up the whole mounted tree rather
+  # than trying to reconcile uids across host and container. o+rwX adds
+  # write for "other" without touching execute bits on plain files.
+  local d="$UWBPX4SIM_DIR"
+  if [[ -d "$d" ]]; then
+    if (( DRY_RUN )); then
+      log_info "[DRY-RUN] chmod -R o+rwX $d"
+    else
+      chmod -R o+rwX "$d" && log_ok "UWBPX4Sim checkout writable by the container" || \
+        log_warn "Could not chmod $d -- the setup GUI may fail to save there."
     fi
-  done
+  fi
 }
 
 attach_to_container() {
@@ -175,7 +230,17 @@ print_usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
 
-Builds (or launches) the mr-radio-localization Docker image ($IMAGE).
+Builds (or launches) an mr-radio-localization Docker image.
+
+Variant:
+  --standalone    The localization stack only, for running against your
+                   own rosbags (default). No simulator, no UWBPX4Sim.
+                   Image: mr-radio-localization:jazzy-standalone
+  --sim           PX4/Gazebo SITL + the localization stack, built FROM the
+                   UWBPX4Sim image (built first if missing). Uses the
+                   UWBPX4Sim checkout at \$UWBPX4SIM_DIR, default
+                   <this repo>/../UWBPX4Sim (offers to clone it if missing).
+                   Image: mr-radio-localization:jazzy-sim
 
 Options:
   --rebuild       Skip the existing-image prompt and always rebuild
@@ -184,8 +249,7 @@ Options:
                    no image exists yet)
   --no-cache      Force a full rebuild, ignoring cached layers
   --run           After building/launching, run the X11 setup and start
-                   the container (xhost + docker compose run --rm app),
-                   without asking
+                   the container (xhost + start/attach), without asking
   --no-run        Skip that and just print the commands, without asking
   -y, --yes       Non-interactive: proceed with recommended defaults
                    (rebuild if an image exists, run afterward), unless
@@ -193,14 +257,17 @@ Options:
   -n, --dry-run   Print what would happen without changing anything
   -h, --help      Show this help message
 
-A full build compiles PX4, ROS 2 packages, and more from scratch --
-expect roughly 15-30 minutes, and real disk headroom (~40GB+) the
-first time or after --no-cache invalidates the early layers.
+Build times: the standalone image takes a few minutes and needs ~10GB of
+disk. The SITL image compiles PX4, ROS 2 packages, and more from scratch
+-- expect roughly 30-45 minutes the first time (mostly the UWBPX4Sim base
+image), and real disk headroom (~40GB+).
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --standalone) VARIANT="standalone"; shift ;;
+    --sim) VARIANT="sim"; shift ;;
     --rebuild) FORCE_ACTION="build"; shift ;;
     --launch|-l) FORCE_ACTION="launch"; shift ;;
     --no-cache) NO_CACHE=1; shift ;;
@@ -213,11 +280,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if is_sim; then
+  IMAGE="mr-radio-localization:jazzy-sim"
+  CONTAINER_NAME="mr-radio-localization-sim"
+  SERVICE="sim"
+  MIN_FREE_GB=35   # a build has failed mid-export with as much as 24-28GB free in practice;
+                   # successful builds in the same environment needed ~40GB+ of real headroom
+else
+  IMAGE="mr-radio-localization:jazzy-standalone"
+  CONTAINER_NAME="mr-radio-localization-standalone"
+  SERVICE="standalone"
+  MIN_FREE_GB=10
+fi
+
 cat <<EOF
 ${C_CYAN}${C_BOLD}==================================================
-  mr-radio-localization -- image setup
+  mr-radio-localization -- image setup ($VARIANT)
 ==================================================${C_RESET}
 EOF
+if ! is_sim; then
+  log_info "Standalone image: the localization stack only, to run against your own bags."
+  log_info "For the PX4/Gazebo SITL simulation, re-run with --sim."
+fi
 (( DRY_RUN )) && log_warn "Dry-run mode: no files will be changed."
 
 # ---------------------------------------------------------------------------
@@ -231,6 +315,10 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 log_ok "docker + docker compose available"
+if is_sim; then
+  [[ -n "${COMPOSE_FILE:-}" ]] && log_info "WSL detected -- using docker-compose.wsl.yml for GPU rendering."
+  resolve_uwbpx4sim_dir
+fi
 
 # ---------------------------------------------------------------------------
 # 1a. Already running (or stopped) in the background? Skip straight to it.
@@ -326,9 +414,11 @@ if [[ "$ACTION" == "build" ]]; then
 # forces this too, even if the base image already exists -- otherwise
 # --no-cache here would silently leave a stale base image untouched while
 # rebuilding only this image's own layers on top of it.
+# Only the SITL image has a base image of its own to build; the standalone
+# one is FROM osrf/ros:jazzy-desktop, which docker pulls by itself.
 BASE_IMAGE="uwbpx4sim:jazzy"
 NEED_BASE_BUILD=0
-if (( NO_CACHE )) || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+if is_sim && { (( NO_CACHE )) || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; }; then
   if (( NO_CACHE )); then
     log_step "UWBPX4Sim base image"
     log_info "$BASE_IMAGE will be rebuilt too (--no-cache)."
@@ -340,7 +430,7 @@ if (( NO_CACHE )) || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
       NEED_BASE_BUILD=1
     else
       log_error "Can't build $IMAGE without $BASE_IMAGE. Build it yourself first with:"
-      log_error "  ( cd \"$SCRIPT_DIR/../UWBPX4Sim/docker\" && ./setup.sh --no-run )"
+      log_error "  ( cd \"$UWBPX4SIM_DIR/docker\" && ./setup.sh --no-run )"
       log_error "or re-run this script and answer yes."
       exit 1
     fi
@@ -403,12 +493,7 @@ if (( NEED_BASE_BUILD )); then
   else
     log_step "Building the UWBPX4Sim base image first ($BASE_IMAGE not found locally)"
   fi
-  base_setup="$SCRIPT_DIR/../UWBPX4Sim/docker/setup.sh"
-  if [[ ! -f "$base_setup" ]]; then
-    log_error "Can't find $base_setup to build the base image."
-    log_error "Check that the UWBPX4Sim submodule is checked out (git submodule update --init)."
-    exit 1
-  fi
+  base_setup="$UWBPX4SIM_DIR/docker/setup.sh"
   # --no-run: just build, don't also start a uwbpx4sim container -- this
   # script wants the image, not a running instance of it.
   base_args=(--no-run -y)
@@ -416,10 +501,12 @@ if (( NEED_BASE_BUILD )); then
   if (( DRY_RUN )); then
     log_info "[DRY-RUN] ( cd \"$(dirname "$base_setup")\" && ./setup.sh ${base_args[*]} )"
   else
-    ( cd "$(dirname "$base_setup")" && ./setup.sh "${base_args[@]}" )
+    # COMPOSE_FILE unset: UWBPX4Sim's setup.sh picks its own compose files
+    # (and its own WSL override) relative to its own docker/ directory.
+    ( cd "$(dirname "$base_setup")" && env -u COMPOSE_FILE ./setup.sh "${base_args[@]}" )
     log_ok "Base image built: $BASE_IMAGE"
   fi
-else
+elif is_sim; then
   log_info "Base image $BASE_IMAGE already present -- not rebuilding it (pass --no-cache to force that too)."
 fi
 
@@ -445,8 +532,8 @@ log_step "Building the image"
 # clean rebuild (it does not rebuild the base image -- see --no-cache's
 # separate handling for that above, at the base-image step).
 build_arg=(--build-arg "CACHEBUST=$(date +%s)")
-compose_args=(--progress=plain build "${build_arg[@]}" app)
-(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "${build_arg[@]}" app)
+compose_args=(--progress=plain build "${build_arg[@]}" "$SERVICE")
+(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "${build_arg[@]}" "$SERVICE")
 
 if (( DRY_RUN )); then
   log_info "[DRY-RUN] (cd \"$SCRIPT_DIR\" && docker compose ${compose_args[*]})"
@@ -499,12 +586,16 @@ if (( ! should_run )); then
   echo
   echo "Next steps:"
   echo "  xhost +local:docker"
-  echo "  cd $SCRIPT_DIR && docker compose run -d --name $CONTAINER_NAME --service-ports app \\"
+  if is_sim; then
+    echo "  export UWBPX4SIM_DIR=$UWBPX4SIM_DIR"
+    [[ -n "${COMPOSE_FILE:-}" ]] && echo "  export COMPOSE_FILE=$COMPOSE_FILE"
+  fi
+  echo "  cd $SCRIPT_DIR && docker compose run -d --name $CONTAINER_NAME --service-ports $SERVICE \\"
   echo "    bash -c 'trap \"exit 0\" TERM; while true; do sleep 3600 & wait \"\$!\"; done'"
   echo "  docker exec -it $CONTAINER_NAME /entrypoint.sh"
   echo
   echo "See docker-compose.yml's comments for the extra X11 socket permission"
-  echo "step Wayland/XWayland desktops need for QGroundControl/Gazebo windows"
+  echo "step Wayland/XWayland desktops need for Gazebo/RViz windows"
   echo "to appear."
   exit 0
 fi
@@ -538,7 +629,7 @@ else
   # default (unlike `up`) -- without it, the configuration GUI (option 1
   # in the menu) is unreachable from the host browser even though it
   # runs fine.
-  ( cd "$SCRIPT_DIR" && docker compose run -d --name "$CONTAINER_NAME" --service-ports app "${PID1_IDLE_CMD[@]}" ) >/dev/null
+  ( cd "$SCRIPT_DIR" && docker compose run -d --name "$CONTAINER_NAME" --service-ports "$SERVICE" "${PID1_IDLE_CMD[@]}" ) >/dev/null
   log_ok "Started $CONTAINER_NAME."
   log_info "It stays up in the background from here on -- closing this terminal won't"
   log_info "stop it. Run this script again any time to get back to its menu; pick"

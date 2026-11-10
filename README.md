@@ -27,82 +27,145 @@ Please follow the links above to the mentioned packages for specific setup instr
 
 ## Main components
 
-This repository contains two ROS2 packages:
+This repository contains one ROS 2 package:
 
 * ```uwb_localization```: includes the UWB-based relative transformation estimation node and the pose-graph optimization node with radar constraints. The ```config``` folder in this package contains the parameter file for these two nodes, in the simulation variant without radar (``params_sim.yaml``) and the dataset variant with radar (``params_dataset.yaml``), using our setup-specific configuration.
 
-
-* ```UWBPX4Sim``` (Git submodule): includes the UWB plugin, modified UAV and UGV models for PX4 SITL, the ROS 2 bridge/offboard package, and the simulator launcher. Detailed setup, plugin parameters, and usage instructions are documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
+The PX4/Gazebo SITL simulator lives in its own repository, [UWBPX4Sim](https://github.com/amartinezsilva/UWBPX4Sim). It includes the UWB plugin, modified UAV and UGV models for PX4 SITL, the ROS 2 bridge/offboard package, and the simulator launcher. It is **not** a submodule of this repository: you only need it if you want to run the SITL simulation, not to build this repository or to run the localization on recorded bags (including the real-world dataset). The two communicate only through ROS 2 topics (see [Launch files](#launch-files)). Detailed setup, plugin parameters, and usage instructions are documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md).
 
 ![](images/Combined_Diagram.drawio.png)
 
-* ```uwb_simulator```: includes a very basic odometry simulation node and a range measurement simulation node (no SITL, no radar) using generic odometry and a basic measurement model, meant for debugging purposes only.  The ```config``` folder in this package contains the parameter file for these two nodes.
-![](images/basic_sim_diagram_simulation.drawio.png)
+Both setups described below put the repositories side by side in the same ROS 2 workspace:
+
+```
+<ros_ws>/src/
+├── mr-radio-localization/   # this repository
+├── UWBPX4Sim/               # only needed for the SITL simulation
+└── ...                      # the other dependencies (local setup only)
+```
 
 ## Running with Docker (Recommended)
 
-A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repository's full stack pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
+A `docker/` folder provides ready-to-use images (Ubuntu 24.04, ROS 2 Jazzy) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/). There are two variants:
 
-This image is layered: it's built `FROM` the standalone [UWBPX4Sim](https://github.com/amartinezsilva/UWBPX4Sim) simulator image (PX4 SITL, Gazebo, the UWB plugin -- see [its own README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md#running-with-docker)), adding only this repo's radar/localization dependencies and ROS 2 packages on top. You don't need to build that base image yourself first -- `./setup.sh` below builds it automatically (asking first) if it isn't already present locally.
+| Variant | Command | What's inside | Use it for |
+|---|---|---|---|
+| **Standalone** (default) | `./setup.sh` | The localization stack only (`FROM osrf/ros:jazzy-desktop`). No simulator. A few minutes to build. | Running the localization on your own rosbags or on the real-world dataset. |
+| **SITL** | `./setup.sh --sim` | PX4 SITL, Gazebo Harmonic and the UWB plugin, plus the localization stack. Built `FROM` the [UWBPX4Sim](https://github.com/amartinezsilva/UWBPX4Sim) image. 30-45+ minutes the first time. | Running the full simulation and localizing in it. |
+
+Both images install the localization dependencies with the same script (`docker/install_localization_deps.sh`), so they always have the same localization stack. Both bind-mount `uwb_localization/bags/` and `uwb_localization/config/` from the host: drop your recorded rosbags into `bags/` and tune `params_sim.yaml`/`params_dataset.yaml` in `config/`, and they're picked up the next time you launch, without rebuilding the image.
+
+### Standalone image
 
 ```bash
-cd <ros_ws>/src
-git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
+git clone https://github.com/amartinezsilva/mr-radio-localization.git
 cd mr-radio-localization/docker
 ./setup.sh
 ```
 
-The first build compiles the UWBPX4Sim base image plus this repo's own workspace, so it can take a while (30-45+ minutes depending on your machine, mostly the one-time base image); subsequent runs reuse the cached images and start instantly, and rebuilding after a change to this repo's own code no longer touches the PX4/Gazebo layers at all. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
+No UWBPX4Sim needed. `setup.sh` builds the image, starts a **persistent** container in the background and drops you into its guided menu:
+
+1. **Launch localization**: pick `localization.launch.py` or `localization_dataset.launch.py`, then a bag from `uwb_localization/bags/`. It runs in the foreground with RViz; press Ctrl-C to stop it and return to the menu.
+2. **Open a shell**: a plain shell in the container, with the workspace already sourced.
+3. **Exit**: stops the container, and asks whether to remove it completely instead (see [Container lifecycle](#container-lifecycle)).
+
+### SITL image
+
+```bash
+cd <ros_ws>/src
+git clone https://github.com/amartinezsilva/mr-radio-localization.git
+git clone https://github.com/amartinezsilva/UWBPX4Sim.git   # optional: setup.sh --sim offers to clone it if missing
+cd mr-radio-localization/docker
+./setup.sh --sim
+```
+
+This image is layered: it's built `FROM` the UWBPX4Sim simulator image (PX4 SITL, Gazebo, the UWB plugin -- see [its own README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md#getting-started)), adding only this repo's radar/localization dependencies and ROS 2 package on top. You don't need to build that base image yourself first -- `./setup.sh --sim` builds it automatically (asking first) if it isn't already present locally.
+
+`setup.sh --sim` looks for UWBPX4Sim next to this repository (`<ros_ws>/src/UWBPX4Sim`) and offers to clone it there if it's missing. To use a checkout somewhere else, point it there with `UWBPX4SIM_DIR=/path/to/UWBPX4Sim ./setup.sh --sim`. That checkout is used to build the base image and is bind-mounted into the container, so the simulator version you have checked out on the host is the one the container runs: layouts, plugin presets, worlds and trajectories edited on the host are picked up the next time you run setup (option 1). Under WSL2, `setup.sh` also adds `docker-compose.wsl.yml` automatically, so Gazebo renders on the GPU.
+
+The first build compiles the UWBPX4Sim base image plus this repo's own workspace, so it can take a while (30-45+ minutes depending on your machine, mostly the one-time base image); subsequent runs reuse the cached images and start instantly, and rebuilding after a change to this repo's own code doesn't touch the PX4/Gazebo layers at all. The guided menu offers:
 
 1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available. Run this once, and again whenever you change the layout or plugin parameters.
 2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`.
 3. **Launch localization**: runs `ros2 launch uwb_localization localization.launch.py` in a new tmux window alongside the running simulation, to see the relative localization estimate. Needs the simulation (option 2) already running.
 4. **Open a shell**: skip the menu and get a plain shell in the container.
-5. **Exit**: stops the container, and asks whether to remove it completely instead (`[y/N]`, default just stops it) -- see below for what each choice actually does. Everything else, including closing your terminal, leaves it running.
+5. **Exit**: stops the container, and asks whether to remove it completely instead (see [Container lifecycle](#container-lifecycle)).
 
-The container keeps running in the background even after you close the terminal, with everything from setup (the compiled PX4 binary, generated models, bridge config, `.setup_env`) still in place — closing your terminal is *not* the same as choosing "Exit". Run `./setup.sh` again any time (from any terminal) to reattach straight to the menu; it skips the build/launch prompt entirely once it finds the container already there.
+### Container lifecycle
 
-Only "Exit" from the menu (or `docker stop mr-radio-localization` from the host) stops it. Answering **N** (or just pressing Enter) at its removal prompt only stops it -- the container's filesystem, including everything setup configured, is untouched, and `./setup.sh` (or `docker start`) resumes it exactly as it was, still ticked as configured. Answering **y** there removes it completely instead, equivalent to `docker rm -f mr-radio-localization` -- the next `./setup.sh` run then creates a genuinely fresh one.
+Both variants work the same way. The images and containers are named per variant (`mr-radio-localization:jazzy-standalone` / `mr-radio-localization-standalone`, and `mr-radio-localization:jazzy-sim` / `mr-radio-localization-sim`), so both can exist side by side.
 
-`uwb_localization/bags/` is bind-mounted into the container, so dropping your own recorded rosbags there on the host makes them available for `localization_dataset.launch.py`/`localization.launch.py` to run against, without rebuilding the image. `uwb_localization/config/` is bind-mounted too, so tuning `params_sim.yaml`/`params_dataset.yaml` on the host takes effect the next time you launch, also without rebuilding.
+The container keeps running in the background even after you close the terminal, with everything you configured (for SITL: the compiled PX4 binary, generated models, bridge config, `.setup_env`) still in place — closing your terminal is *not* the same as choosing "Exit". Run `./setup.sh` (or `./setup.sh --sim`) again any time, from any terminal, to reattach straight to the menu; it skips the build/launch prompt entirely once it finds the container already there.
 
-## Building this repository locally
+Only "Exit" from the menu (or `docker stop <container>` from the host) stops it. Answering **N** (or just pressing Enter) at its removal prompt only stops it -- the container's filesystem is untouched, and `./setup.sh` (or `docker start`) resumes it exactly as it was. Answering **y** there removes it completely instead, equivalent to `docker rm -f <container>` -- the next `./setup.sh` run then creates a genuinely fresh one.
 
-Once the dependency packages and libraries  have been cloned and set up, you can then clone this repository to your ROS 2 workspace and compile with the standard ```colcon build``` command. 
+**Upgrading from an earlier version:** older versions of this repo had a single image, `mr-radio-localization:jazzy`, with a container called `mr-radio-localization`. The new scripts don't use those names, so you can remove them with `docker rm -f mr-radio-localization && docker rmi mr-radio-localization:jazzy`.
+
+## Running locally (without Docker)
+
+The localization stack and the simulator are built side by side in one ROS 2 workspace. Steps 1-3 are enough to build this repository and run it on recorded bags (including the real-world dataset); step 4 is only needed for the SITL simulation.
+
+**1. Install the dependencies.** Install the packages and libraries listed in [Basic Dependencies](#basic-dependencies), following the setup instructions in each of their repositories. Ceres, Sophus and small_gicp are system libraries; `eliko_ros`, `ars548_ros` and `4D-Radar-Odom` are ROS 2 packages that go into your workspace in the next step.
+
+**2. Clone this repository and the ROS 2 package dependencies into your workspace:**
+
+```bash
+mkdir -p <ros_ws>/src && cd <ros_ws>/src
+git clone https://github.com/amartinezsilva/mr-radio-localization.git
+git clone https://github.com/robotics-upo/eliko_ros.git
+git clone https://github.com/robotics-upo/ars548_ros.git    # on ROS 2 Jazzy, add: -b jazzy
+git clone -b arco-drone-integration https://github.com/robotics-upo/4D-Radar-Odom.git
+```
+
+**3. Build the workspace:**
+
+```bash
+cd <ros_ws>
+colcon build
+source install/setup.bash
+```
+
+You can now run the localization on recorded bags, including the real-world dataset (see [Launch files](#launch-files)).
+
+**4. (Optional) Set up the PX4 / Gazebo SITL simulator.** Clone UWBPX4Sim into the **same** workspace, next to this repository:
 
 ```bash
 cd <ros_ws>/src
-git clone --recurse-submodules https://github.com/amartinezsilva/mr-radio-localization.git
-cd ..
-colcon build
+git clone https://github.com/amartinezsilva/UWBPX4Sim.git
 ```
 
-## PX4 / Gazebo SITL
+Then follow its [Running without Docker](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/docs/advanced_setup.md#running-without-docker) guide. That guide covers installing Gazebo Harmonic, PX4 and the Micro XRCE-DDS Agent, adding `px4_msgs`/`px4_ros_com` to the workspace, running `setup_simulator.sh`, and rebuilding the workspace with `colcon build`. `eliko_ros` is already in the workspace from step 2.
 
-All SITL-specific dependencies, generated-model workflow, PX4 integration, ROS 2 bridge/offboard package setup, launcher usage, and plugin configuration are documented in [`UWBPX4Sim`](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). If you build this repository locally, follow the instructions there to complete the setup first. This is not needed if you user the recommended Docker setup.
+Once it's set up, run the simulation and the localization in two terminals:
 
-Once the simulator is set up and you have recorded data or have the ROS topics available, this parent repository provides the localization launch files that consume those topics.
+```bash
+# Terminal 1: PX4 SITL + Gazebo + UWB bridge/offboard nodes
+cd <ros_ws>/src/UWBPX4Sim
+./simulator_launcher.sh
+
+# Terminal 2: relative localization
+source <ros_ws>/install/setup.bash
+ros2 launch uwb_localization localization.launch.py
+```
+
+`params_sim.yaml` has to match the layout you simulate (topics, anchor/tag IDs and positions). See [Launch files](#launch-files).
 
 **Disclaimer**: the PX4 SITL simulation has been tested with ROS 2 Jazzy only, while the rest of the implementation has been tested in both ROS 2 Humble and ROS 2 Jazzy.
+
+**Sharing one UWBPX4Sim checkout between both setups:** `docker/setup.sh` uses `<ros_ws>/src/UWBPX4Sim` by default, so the local and Docker setups can use the same checkout. `setup_simulator.sh` writes paths for the environment it ran in to `UWBPX4Sim/.setup_env`, so re-run it (option 1 in the container menu, or `./setup_simulator.sh` locally) whenever you switch between the two.
 
 
 ## Launch files
 
-```uwb_localization``` contains three launch files. To launch the real world dataset experiment (which includes radar odometry), type:
+```uwb_localization``` contains two launch files. To launch the real world dataset experiment (which includes radar odometry), type:
 ``` 
 ros2 launch uwb_localization localization_dataset.launch.py
 ```
 **Note**: You can find and download the real-world dataset as a .bag file in [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/KNKWMJ). The original dataset was recorded in ROS 2 Humble and as a consequence has the SQLite ``.db3`` format. If you are using ROS Jazzy, you may have to convert it first to the new standard ``.mcap`` format with [this tool](https://mcap.dev/guides/getting-started/ros-2). 
 
-The second launcher ``localization.launch.py`` executes just the main system (without the radar odometry nodes) and is used in the SITL scenario launched from the simulator tools documented in [the ```UWBPX4Sim``` README](https://github.com/amartinezsilva/UWBPX4Sim/blob/main/README.md). 
+The second launcher ``localization.launch.py`` executes just the main system (without the radar odometry nodes) and is used in the SITL scenario, together with the simulation launched from [UWBPX4Sim](https://github.com/amartinezsilva/UWBPX4Sim) (from the Docker menu, or with `simulator_launcher.sh` in the local setup). 
 
 The localization configuration file is the single source of truth for the simulated robot pair. By default, ```params_sim.yaml``` subscribes to the first pair generated by ```UWBPX4Sim```: ```/ugv_0/odom```, ```/uav_0/odom```, and ```/ugv_0/eliko/Distances```. To localize a different pair, update the corresponding topic names and anchor/tag IDs in ```uwb_localization/config/params_sim.yaml```.
-
-The third and final launcher is a basic simulated scenario with just UWB and generic odometry (no SITL). To use it, type:
-``` 
-ros2 launch uwb_localization localization_sim_basic.launch.py
-
-```
 
 # Run localization with recorded data
 
@@ -132,7 +195,7 @@ export LD_LIBRARY_PATH=/home/YOUR_USER/Micro-XRCE-DDS-Agent/build/temp_install/f
 
 Close the file and source it to apply the changes. After this, the agent should connect as expected and you should see the ROS 2 topics. 
 
-If you'd rather avoid these potential issues entirely, see [Running with Docker](#running-with-docker) above for a pre-built, known-working environment.
+If you'd rather avoid these potential issues entirely, see [Running with Docker](#running-with-docker-recommended) above for a pre-built, known-working environment.
 
 # Disclaimer on AI usage
 

@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# entrypoint.sh - Interactive entrypoint for the mr-radio-localization image.
+# entrypoint-sim.sh - Interactive entrypoint for the mr-radio-localization
+# SITL image (Dockerfile.sim; installed in the image as /entrypoint.sh).
 #
 # Extends UWBPX4Sim's own entrypoint (sourced below from
 # /uwbpx4sim-entrypoint-lib.sh, baked into the base image) rather than
@@ -21,6 +22,8 @@ set -e
 
 # shellcheck disable=SC1091
 source /uwbpx4sim-entrypoint-lib.sh
+# shellcheck disable=SC1091
+source /localization-lib.sh
 
 REPO_DIR="$HOME/ros2_ws/src/mr-radio-localization"
 
@@ -34,11 +37,12 @@ ${C_CYAN}${C_BOLD}==================================================
 PX4 SITL, Gazebo Harmonic, and the ROS 2 UWB relative-localization
 stack, pre-built and ready to go.
 
-${C_DIM}Tip: UWBPX4Sim/config, uwb_gazebo_plugin, and worlds are bind-mounted
-from the host -- edit a layout, params.yaml, or drop in a custom .sdf
-world there, then re-run setup (option 1) to apply it.
+${C_DIM}Tip: your whole UWBPX4Sim checkout (UWBPX4SIM_DIR on the host) is
+bind-mounted -- edit a layout, a plugin-parameter preset, or drop in a
+custom .sdf world there, then re-run setup (option 1) to apply it.
+uwb_localization/config and uwb_localization/bags are bind-mounted too.
 
-Tip: for QGroundControl/Gazebo windows to appear, run on the HOST
+Tip: for Gazebo/RViz windows to appear, run on the HOST
 first: xhost +local:docker (see docker-compose.yml's comments for the
 extra step Wayland/XWayland desktops need).
 
@@ -56,8 +60,12 @@ print_menu() {
   # user tell at a glance, before picking option 2, whether a setup is
   # already loaded or still needs to be run first. Checked fresh on every
   # call (not cached) so it reflects setup having *just* finished too.
+  # Same check as UWBPX4Sim's own print_menu: .setup_env lives in the
+  # host-mounted checkout and outlives the container, while the built
+  # plugin lives in this container's PX4 tree -- both must exist.
   local setup_tick=""
-  if [[ -f "$UWBPX4SIM_DIR/.setup_env" ]]; then
+  local plugin_lib="$PX4_DIR/build/px4_sitl_default/src/modules/simulation/gz_plugins/libUWBGazeboPlugin.so"
+  if [[ -f "$UWBPX4SIM_DIR/.setup_env" && -f "$plugin_lib" ]]; then
     setup_tick=" ${C_GREEN}✓ configured${C_RESET}"
   fi
   cat <<EOF
@@ -78,56 +86,9 @@ EOF
 }
 
 run_localization() {
-  local bags_dir="$HOME/ros2_ws/install/uwb_localization/share/uwb_localization/bags"
-
-  echo
-  echo "Which localization launch file do you want to run?"
-  echo "  1) localization.launch.py         -- needs the simulation running (params_sim.yaml + RViz)"
-  echo "  2) localization_dataset.launch.py -- self-contained offline replay (params_dataset.yaml + radar odometry)"
-  local launch_choice
-  read -r -p "Select [1-2] (default 1): " launch_choice
-  local launch_file="localization.launch.py"
-  [[ "$launch_choice" == "2" ]] && launch_file="localization_dataset.launch.py"
-
-  # Both launch files take a `bag_name` launch argument (relative to
-  # uwb_localization/bags/, bind-mounted from the host -- see
-  # docker-compose.yml) instead of a hardcoded path, so offer whatever bags
-  # are actually sitting there rather than making the user hand-edit the
-  # launch file every time they want to try a different one. Recognizes
-  # classic directory-style bags (a metadata.yaml one level down) and
-  # standalone .mcap bags (like the bundled experiment1_gt_v2_0 one).
-  local -a bag_choices=()
-  if [[ -d "$bags_dir" ]]; then
-    while IFS= read -r -d '' metadata; do
-      bag_choices+=("$(dirname "${metadata#"$bags_dir"/}")")
-    done < <(find "$bags_dir" -mindepth 2 -maxdepth 2 -name metadata.yaml -print0 2>/dev/null)
-    while IFS= read -r -d '' mcap; do
-      bag_choices+=("${mcap#"$bags_dir"/}")
-    done < <(find "$bags_dir" -mindepth 1 -name '*.mcap' -print0 2>/dev/null)
-  fi
-
-  local bag_name=""
-  if [[ ${#bag_choices[@]} -gt 0 ]]; then
-    echo
-    echo "Available bags (drop more into uwb_localization/bags/ on the host):"
-    local i=1
-    for b in "${bag_choices[@]}"; do
-      echo "  $i) $b"
-      i=$((i + 1))
-    done
-    echo "  0) Use the launch file's built-in default"
-    local bag_choice
-    read -r -p "Select a bag [0-${#bag_choices[@]}] (default 0): " bag_choice
-    if [[ "$bag_choice" =~ ^[0-9]+$ ]] && (( bag_choice >= 1 && bag_choice <= ${#bag_choices[@]} )); then
-      bag_name="${bag_choices[$((bag_choice - 1))]}"
-    fi
-  else
-    log_warn "No bags found in uwb_localization/bags/ on the host -- using the launch file's built-in default."
-    log_warn "Drop a recorded rosbag there (see that folder's README.md) to select it here next time."
-  fi
-
-  local -a launch_args=()
-  [[ -n "$bag_name" ]] && launch_args+=("bag_name:=$bag_name")
+  choose_localization_launch
+  local launch_file="$LAUNCH_FILE"
+  local -a launch_args=("${LAUNCH_ARGS[@]}")
 
   # simulator_launcher.sh's tmux session name (see that script's SESSION
   # var) -- localization.launch.py needs the simulation actually running,
