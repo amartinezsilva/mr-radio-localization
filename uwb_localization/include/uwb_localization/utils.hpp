@@ -151,13 +151,22 @@ namespace uwb_localization
         return state;
     }
 
+    // SE(3) pose from a 4-DoF state [x, y, z, yaw] plus fixed roll/pitch:
+    // R = Rz(yaw) * Ry(pitch) * Rx(roll), t = [x, y, z]. Templated so the
+    // Ceres factors (CostFunctions.hpp) use this same definition with Jets.
+    template <typename T>
+    Sophus::SE3<T> buildSE3(const T* state, double roll, double pitch) {
+        Eigen::Matrix<T, 3, 1> t;
+        t << state[0], state[1], state[2];
+        Eigen::Matrix<T, 3, 3> R = (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T, 3, 1>::UnitZ()) *
+                                    Eigen::AngleAxis<T>(T(pitch), Eigen::Matrix<T, 3, 1>::UnitY()) *
+                                    Eigen::AngleAxis<T>(T(roll),  Eigen::Matrix<T, 3, 1>::UnitX())).toRotationMatrix();
+        return Sophus::SE3<T>(R, t);
+    }
+
     // Build a Sophus SE3 transformation from roll, pitch and a 4D state vector.
     inline Sophus::SE3d buildTransformationSE3(double roll, double pitch, const Eigen::Vector4d& s) {
-        Eigen::Vector3d t(s[0], s[1], s[2]);
-        Eigen::Matrix3d R = (Eigen::AngleAxisd(s[3], Eigen::Vector3d::UnitZ()) *
-                            Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-                            Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX())).toRotationMatrix();
-        return Sophus::SE3d(R, t);
+        return buildSE3(s.data(), roll, pitch);
     }
 
     inline Eigen::Matrix4d reduceCovarianceMatrix(const Eigen::Matrix<double,6,6> &cov6) {

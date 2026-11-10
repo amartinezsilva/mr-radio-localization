@@ -23,7 +23,6 @@
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/posegraph.hpp"
 #include "uwb_localization/CostFunctions.hpp"
-#include "uwb_localization/manifolds.hpp"
 
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -173,6 +172,7 @@ private:
                                          ceres::LossFunction* loss);
 
   /// Build & solve the pose graph with Ceres; updates states & covariances.
+  /// Runs buildPosegraphProblem -> solvePosegraph -> updatePosegraphCovariances.
   bool runPosegraphOptimization(MapOfStates& agv_map,
                                 MapOfStates& uav_map,
                                 const VectorOfConstraints& proprioceptive_constraints_agv,
@@ -181,6 +181,25 @@ private:
                                 const VectorOfConstraints& extraceptive_constraints_uav,
                                 const VectorOfConstraints& encounter_constraints_uwb,
                                 const VectorOfConstraints& encounter_constraints_pointcloud);
+
+  /// Adds the nodes (with sliding-window freezing), priors and all factors to `problem`.
+  void buildPosegraphProblem(ceres::Problem& problem,
+                             MapOfStates& agv_map,
+                             MapOfStates& uav_map,
+                             const VectorOfConstraints& proprioceptive_constraints_agv,
+                             const VectorOfConstraints& extraceptive_constraints_agv,
+                             const VectorOfConstraints& proprioceptive_constraints_uav,
+                             const VectorOfConstraints& extraceptive_constraints_uav,
+                             const VectorOfConstraints& encounter_constraints_uwb,
+                             const VectorOfConstraints& encounter_constraints_pointcloud);
+
+  /// Solves `problem`; returns true on convergence and records solver metrics.
+  bool solvePosegraph(ceres::Problem& problem);
+
+  /// Updates the covariance of every optimized (non-constant) node and anchor.
+  void updatePosegraphCovariances(ceres::Problem& problem,
+                                  MapOfStates& agv_map,
+                                  MapOfStates& uav_map);
 
 private:
   //---------------- Subscriptions ----------------//

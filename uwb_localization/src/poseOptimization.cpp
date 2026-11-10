@@ -793,59 +793,78 @@ bool PoseOptimizationNode::addEncounterTrajectoryConstraints(ceres::Problem &pro
     }
 
 // ---------------- Pose Graph Optimization -------------------
-    //
-    // In this function we build a Ceres problem that fuses:
-    // - A prior on each node and the previous.
-    // - Inter-robot UWB factor linking nodes based on relative transform estimation input
-    // - Intra-robot ICP and odometry factors linking consecutive nodes.
-    // - Inter-robot ICP factors linking nodes from the two robots.
-    
+//
+// The pose graph fuses:
+// - A prior on each robot's first node (while it is still in the window).
+// - Intra-robot odometry and radar (ICP/ego-velocity) factors linking nodes.
+// - Inter-robot UWB factors, from the relative transform estimation, linking
+//   every pair of nodes in the window through the two anchor nodes.
+// - Inter-robot radar (ICP) encounter factors.
+//
+// runPosegraphOptimization() builds the problem, solves it and, on
+// convergence, updates the node covariances: one step per helper below.
+
 bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfStates &uav_map,
                                 const VectorOfConstraints &proprioceptive_constraints_agv, const VectorOfConstraints &extraceptive_constraints_agv,
                                 const VectorOfConstraints &proprioceptive_constraints_uav, const VectorOfConstraints &extraceptive_constraints_uav,
                                 const VectorOfConstraints &encounter_constraints_uwb, const VectorOfConstraints &encounter_constraints_pointcloud) {
 
     ceres::Problem problem;
+    buildPosegraphProblem(problem, agv_map, uav_map,
+                          proprioceptive_constraints_agv, extraceptive_constraints_agv,
+                          proprioceptive_constraints_uav, extraceptive_constraints_uav,
+                          encounter_constraints_uwb, encounter_constraints_pointcloud);
 
-    ceres::Manifold* state_manifold_4d = new StateManifold4D();
-    ceres::Manifold* state_manifold_3d = new StateManifold3D();
+    if (!solvePosegraph(problem)) {
+        RCLCPP_WARN(this->get_logger(), "Failed to converge.");
+        return false;
+    }
+
+    // Blocks have no yaw-wrapping manifold (the residuals are 2*pi-periodic in
+    // yaw), so bring the optimized yaws back to [-pi, pi].
+    for (auto &kv : agv_map) kv.second.state[3] = normalizeAngle(kv.second.state[3]);
+    for (auto &kv : uav_map) kv.second.state[3] = normalizeAngle(kv.second.state[3]);
+    anchor_node_agv_.state[3] = normalizeAngle(anchor_node_agv_.state[3]);
+    anchor_node_uav_.state[3] = normalizeAngle(anchor_node_uav_.state[3]);
+
+    updatePosegraphCovariances(problem, agv_map, uav_map);
+    return true;
+}
+
+void PoseOptimizationNode::buildPosegraphProblem(ceres::Problem &problem,
+                                MapOfStates &agv_map, MapOfStates &uav_map,
+                                const VectorOfConstraints &proprioceptive_constraints_agv, const VectorOfConstraints &extraceptive_constraints_agv,
+                                const VectorOfConstraints &proprioceptive_constraints_uav, const VectorOfConstraints &extraceptive_constraints_uav,
+                                const VectorOfConstraints &/*encounter_constraints_uwb*/, const VectorOfConstraints &encounter_constraints_pointcloud) {
+
+    // Planar nodes keep z fixed (index 2 of [x, y, z, yaw]); the rest are
+    // plain 4-DoF blocks. The problem takes ownership of the manifold.
+    ceres::Manifold* planar_manifold = new ceres::SubsetManifold(4, {2});
 
     // Define a robust kernel
-    double loss_threshold = 2.5; // = residuals higher than 2.0 times sigma are outliers
+    double loss_threshold = 2.5; // = residuals higher than 2.5 times sigma are outliers
     // ceres::LossFunction* robust_loss = new ceres::HuberLoss(loss_threshold);
     ceres::LossFunction* robust_loss = new ceres::CauchyLoss(loss_threshold);
 
-    //Add the anchor nodes
+    // Anchor nodes: place each robot's odometry frame in the common frame.
     problem.AddParameterBlock(anchor_node_uav_.state.data(), 4);
-    problem.AddParameterBlock(anchor_node_agv_.state.data(), 4);
-    problem.SetManifold(anchor_node_uav_.state.data(), state_manifold_4d);
-    problem.SetManifold(anchor_node_agv_.state.data(), state_manifold_3d);
+    problem.AddParameterBlock(anchor_node_agv_.state.data(), 4, planar_manifold);
 
-    //anchor -freeze- the first node, and freeze the part of the node outside the sliding window
+    // Robot nodes. Nodes outside the sliding window (and all of them until the
+    // window has min_keyframes nodes) are held constant.
+    auto add_nodes = [&](MapOfStates &map, int current_id) {
+        for (auto &kv : map) {
+            State &state = kv.second;
+            if (state.planar) problem.AddParameterBlock(state.state.data(), 4, planar_manifold);
+            else problem.AddParameterBlock(state.state.data(), 4);
 
-    for (auto it = agv_map.begin(); it != agv_map.end(); ++it) {
-        State& state = it->second;
-        problem.AddParameterBlock(state.state.data(), 4);  
-
-        if(state.planar) problem.SetManifold(state.state.data(), state_manifold_3d);
-        else problem.SetManifold(state.state.data(), state_manifold_4d);
-
-        if (posegraph::isNodeFixedKF(agv_id_, it->first, max_keyframes_, min_keyframes_)) problem.SetParameterBlockConstant(state.state.data());
-    }
-
-    for (auto it = uav_map.begin(); it != uav_map.end(); ++it) {
-        State& state = it->second;
-        problem.AddParameterBlock(state.state.data(), 4);
-
-        //in this implementation, UAV poses are always optimized in z
-        if(state.planar) problem.SetManifold(state.state.data(), state_manifold_3d);
-        else problem.SetManifold(state.state.data(), state_manifold_4d);
-
-        // now still apply your fixed‐node logic, etc.
-        if (posegraph::isNodeFixedKF(uav_id_, it->first, max_keyframes_, min_keyframes_)) {
-            problem.SetParameterBlockConstant(state.state.data());
+            if (posegraph::isNodeFixedKF(current_id, kv.first, max_keyframes_, min_keyframes_)) {
+                problem.SetParameterBlockConstant(state.state.data());
+            }
         }
-    }
+    };
+    add_nodes(agv_map, agv_id_);
+    add_nodes(uav_map, uav_id_);
 
     // For the starting nodes, add the prior residual blocks if they are not yet optimized and fixed.
     // Bind by reference: the prior must act on the parameter block stored in the map. A copy
@@ -857,25 +876,25 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
         problem.AddResidualBlock(prior_cost_agv, nullptr, first_node_agv.state.data());
     }
 
-    if (!posegraph::isNodeFixedKF(uav_id_, 0, max_keyframes_, min_keyframes_)) {    
+    if (!posegraph::isNodeFixedKF(uav_id_, 0, max_keyframes_, min_keyframes_)) {
         auto& first_node_uav = uav_map[0];
         ceres::CostFunction* prior_cost_uav = PriorCostFunction::Create(prior_uav_.pose, first_node_uav.roll, first_node_uav.pitch, prior_uav_.covariance);
         problem.AddResidualBlock(prior_cost_uav, nullptr, first_node_uav.state.data());
     }
 
-    // Add measurement constraints for each set.
-    bool proprioceptive_constraints_agv_available = addMeasurementConstraints(problem, proprioceptive_constraints_agv, agv_map, agv_id_, max_keyframes_, robust_loss);
-    bool proprioceptive_constraints_uav_available = addMeasurementConstraints(problem, proprioceptive_constraints_uav, uav_map, uav_id_, max_keyframes_, robust_loss);
-    bool extraceptive_constraints_agv_available = addMeasurementConstraints(problem, extraceptive_constraints_agv, agv_map, agv_id_, max_keyframes_, robust_loss);
-    bool extraceptive_constraints_uav_available = addMeasurementConstraints(problem, extraceptive_constraints_uav, uav_map, uav_id_, max_keyframes_, robust_loss);
+    // Intra-robot factors: odometry (proprioceptive) and radar (extraceptive).
+    addMeasurementConstraints(problem, proprioceptive_constraints_agv, agv_map, agv_id_, max_keyframes_, robust_loss);
+    addMeasurementConstraints(problem, proprioceptive_constraints_uav, uav_map, uav_id_, max_keyframes_, robust_loss);
+    addMeasurementConstraints(problem, extraceptive_constraints_agv, agv_map, agv_id_, max_keyframes_, robust_loss);
+    addMeasurementConstraints(problem, extraceptive_constraints_uav, uav_map, uav_id_, max_keyframes_, robust_loss);
 
-    // Add encounter constraints.
+    // Inter-robot (encounter) factors.
     bool encounter_uwb_available = false;
     //**new version, apply constraint to all nodes in window**//
     if(uwb_transform_available_) encounter_uwb_available = addEncounterTrajectoryConstraints(problem, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
     //**previous version**//
     // encounter_uwb_available = addEncounterConstraints(problem, encounter_constraints_uwb, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
-    
+
     bool encounter_pointcloud_available = addEncounterConstraints(problem, encounter_constraints_pointcloud, agv_map, uav_map, agv_id_, uav_id_, max_keyframes_, robust_loss);
 
     if(!encounter_uwb_available && !encounter_pointcloud_available){
@@ -886,16 +905,19 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
     else{
         //ALWAYS COMMENT ONE
         //ANCHOR THE AGV TRAJECTORY
-        ceres::CostFunction *prior_cost_anchor_agv = PriorCostFunction::Create(prior_anchor_agv_.pose, 
+        ceres::CostFunction *prior_cost_anchor_agv = PriorCostFunction::Create(prior_anchor_agv_.pose,
             anchor_node_agv_.roll, anchor_node_agv_.pitch, prior_anchor_agv_.covariance);
         problem.AddResidualBlock(prior_cost_anchor_agv, nullptr, anchor_node_agv_.state.data());
 
         // //ANCHOR THE UAV TRAJECTORY
-        // ceres::CostFunction *prior_cost_anchor_uav = PriorCostFunction::Create(prior_anchor_uav_.pose, 
+        // ceres::CostFunction *prior_cost_anchor_uav = PriorCostFunction::Create(prior_anchor_uav_.pose,
         //     anchor_node_uav_.roll, anchor_node_uav_.pitch, prior_anchor_uav_.covariance);
         // problem.AddResidualBlock(prior_cost_anchor_uav, nullptr, anchor_node_uav_.state.data());
     }
-    
+}
+
+bool PoseOptimizationNode::solvePosegraph(ceres::Problem &problem) {
+
     // Configure solver options
     ceres::Solver::Options options;
     options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY; // ceres::SPARSE_NORMAL_CHOLESKY,  ceres::DENSE_QR
@@ -910,111 +932,53 @@ bool PoseOptimizationNode::runPosegraphOptimization(MapOfStates &agv_map, MapOfS
     ceres::Solve(options, &problem, &summary);
     RCLCPP_INFO(this->get_logger(), summary.BriefReport().c_str());
 
-    // Notify and update values if optimization converged
-    if (summary.termination_type == ceres::CONVERGENCE){
+    if (summary.termination_type != ceres::CONVERGENCE) return false;
 
+    total_solves_++;
+    total_solver_time_ += summary.total_time_in_seconds;
+    solver_times_.push_back(summary.total_time_in_seconds);
+    return true;
+}
 
-        total_solves_++;
-        total_solver_time_ += summary.total_time_in_seconds;
-        solver_times_.push_back(summary.total_time_in_seconds);
+void PoseOptimizationNode::updatePosegraphCovariances(ceres::Problem &problem,
+                                                      MapOfStates &agv_map, MapOfStates &uav_map) {
 
-        ceres::Covariance::Options cov_options;
-        ceres::Covariance covariance(cov_options);
+    // Every node and anchor that was optimized (i.e. not held constant).
+    std::vector<State*> optimized;
+    for (auto &kv : agv_map) optimized.push_back(&kv.second);
+    for (auto &kv : uav_map) optimized.push_back(&kv.second);
+    optimized.push_back(&anchor_node_agv_);
+    optimized.push_back(&anchor_node_uav_);
+    optimized.erase(std::remove_if(optimized.begin(), optimized.end(), [&](State *s) {
+        return problem.IsParameterBlockConstant(s->state.data());
+    }), optimized.end());
 
-        std::vector<std::pair<const double*, const double*>> covariance_blocks;
-        // AFTER all parameter blocks and cost functions are added
-        for (auto& kv : agv_map) {
-            if (!problem.IsParameterBlockConstant(kv.second.state.data()))
-                covariance_blocks.emplace_back(kv.second.state.data(), kv.second.state.data());
-        }
-        for (auto& kv : uav_map) {
-            if (!problem.IsParameterBlockConstant(kv.second.state.data()))
-                covariance_blocks.emplace_back(kv.second.state.data(), kv.second.state.data());
-        }
-        // Anchor nodes, if not constant
-        if (!problem.IsParameterBlockConstant(anchor_node_agv_.state.data()))
-            covariance_blocks.emplace_back(anchor_node_agv_.state.data(), anchor_node_agv_.state.data());
+    std::vector<std::pair<const double*, const double*>> covariance_blocks;
+    for (State *s : optimized) covariance_blocks.emplace_back(s->state.data(), s->state.data());
 
-        if (!problem.IsParameterBlockConstant(anchor_node_uav_.state.data()))
-            covariance_blocks.emplace_back(anchor_node_uav_.state.data(), anchor_node_uav_.state.data());
+    ceres::Covariance::Options cov_options;
+    ceres::Covariance covariance(cov_options);
 
-        if (covariance.Compute(covariance_blocks, &problem)) {
-
-            std::unordered_set<const double*> requested_blocks;
-            for (const auto& pair : covariance_blocks) {
-                requested_blocks.insert(pair.first);  // pair.first == pair.second
-            }
-
-            for (auto& kv : agv_map) {
-                const double* ptr = kv.second.state.data();
-                if (requested_blocks.count(ptr)) {
-                    double cov_data[16];
-                    if (covariance.GetCovarianceBlock(ptr, ptr, cov_data)) {
-                        kv.second.covariance = Eigen::Map<Eigen::Matrix4d>(cov_data);
-                    } else {
-                        kv.second.covariance = Eigen::Matrix4d::Identity();
-                        RCLCPP_WARN(this->get_logger(), "Failed to get AGV covariance for node %d", kv.first);
-                    }
-                }
-            }
-
-            for (auto& kv : uav_map) {
-                const double* ptr = kv.second.state.data();
-                if (requested_blocks.count(ptr)) {
-                    double cov_data[16];
-                    if (covariance.GetCovarianceBlock(ptr, ptr, cov_data)) {
-                        kv.second.covariance = Eigen::Map<Eigen::Matrix4d>(cov_data);
-                    } else {
-                        kv.second.covariance = Eigen::Matrix4d::Identity();
-                        RCLCPP_WARN(this->get_logger(), "Failed to get UAV covariance for node %d", kv.first);
-                    }
-                }
-            }
-
-            if (requested_blocks.count(anchor_node_agv_.state.data())) {
-                double cov_data[16];
-                if (covariance.GetCovarianceBlock(anchor_node_agv_.state.data(), anchor_node_agv_.state.data(), cov_data)) {
-                    anchor_node_agv_.covariance = Eigen::Map<Eigen::Matrix4d>(cov_data);
-                } else {
-                    anchor_node_agv_.covariance = Eigen::Matrix4d::Identity();
-                }
-            }
-
-            if (requested_blocks.count(anchor_node_uav_.state.data())) {
-                double cov_data[16];
-                if (covariance.GetCovarianceBlock(anchor_node_uav_.state.data(), anchor_node_uav_.state.data(), cov_data)) {
-                    anchor_node_uav_.covariance = Eigen::Map<Eigen::Matrix4d>(cov_data);
-                } else {
-                    anchor_node_uav_.covariance = Eigen::Matrix4d::Identity();
-                }
-            }
-
-        } else {
-            RCLCPP_WARN(this->get_logger(), "Failed to compute covariances.");
-            // Set default covariances if needed.
-            for (auto& kv : agv_map) {
-                kv.second.covariance = Eigen::Matrix4d::Identity();
-            }
-
-            for (auto& kv : uav_map) {
-                kv.second.covariance = Eigen::Matrix4d::Identity();
-            }
-
-            anchor_node_agv_.covariance = Eigen::Matrix4d::Identity();
-            anchor_node_uav_.covariance = Eigen::Matrix4d::Identity();
-        }
-
-        return true;
-
-    } else {
-
-            RCLCPP_WARN(this->get_logger(), "Failed to converge.");
-            
-            return false;
+    if (!covariance.Compute(covariance_blocks, &problem)) {
+        RCLCPP_WARN(this->get_logger(), "Failed to compute covariances.");
+        // Set default covariances.
+        for (auto &kv : agv_map) kv.second.covariance = Eigen::Matrix4d::Identity();
+        for (auto &kv : uav_map) kv.second.covariance = Eigen::Matrix4d::Identity();
+        anchor_node_agv_.covariance = Eigen::Matrix4d::Identity();
+        anchor_node_uav_.covariance = Eigen::Matrix4d::Identity();
+        return;
     }
-                                
-    return false; 
-        
+
+    // Nodes held constant keep their previous covariance.
+    for (State *s : optimized) {
+        double cov_data[16];
+        if (covariance.GetCovarianceBlock(s->state.data(), s->state.data(), cov_data)) {
+            s->covariance = Eigen::Map<Eigen::Matrix4d>(cov_data);
+        } else {
+            s->covariance = Eigen::Matrix4d::Identity();
+            RCLCPP_WARN(this->get_logger(), "Failed to get covariance for a pose-graph node.");
+        }
+    }
 }
 
 
