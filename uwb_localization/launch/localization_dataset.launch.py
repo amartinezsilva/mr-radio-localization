@@ -16,10 +16,12 @@ def generate_launch_description():
 
     # Path to the bag to play, relative to uwb_localization/bags/. Override
     # with `ros2 launch uwb_localization localization_dataset.launch.py
-    # bag_name:=...` instead of editing this file.
+    # bag_name:=...` instead of editing this file. The default is the
+    # real-world dataset exactly as extracted from its Harvard Dataverse
+    # archive (a directory-style bag; plays as-is on Humble and Jazzy).
     bag_name_arg = DeclareLaunchArgument(
         'bag_name',
-        default_value='experiment1_gt_v2_0/experiment1_gt_v2_0.mcap',
+        default_value='experiment1_gt_v2',
         description='Path to the bag to play, relative to uwb_localization/bags/'
     )
     path_to_bag = PathJoinSubstitution([package_dir, 'bags', LaunchConfiguration('bag_name')])
