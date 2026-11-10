@@ -50,6 +50,8 @@ pose_optimization_node:
     radar_stdev: 0.2
     icp_type_radar: 2 #ICP algorithm variant: 2->Generalized ICP, 1->Point to Plane ICP, else -> basic ICP
     radar_history_size: 3 #history of radar keyframes to compare against
+    radar_min_inliers: 10 #minimum matched points for a GICP alignment to become a factor
+    radar_yaw_stdev_deg: 1.0 #yaw std of radar factors (degrees); x/y/z std is radar_stdev (z variance inflated x10)
     agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #Local initial pose AGV [xyz rpy] [-2.805, -1.951, 0.0, 0.0, 0.0, -0.102]
     uav_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #Local initial pose UAV
     agv_anchor_prior: [13.351, 27.385, 0.636, 0.001, 0.001, 3.079] #[13.351, 27.385, 0.636, 0.001, 0.001, 3.079] #prior for the AGV anchor node (initial pose wrt global map frame)

@@ -124,7 +124,8 @@ private:
                                        const Eigen::Matrix4f& transformation,
                                        double sensor_variance = 0.01);
 
-  /// Run ICP/GICP with configured settings.
+  /// Run ICP/GICP with configured settings. For GICP (icp_type 2) also returns
+  /// the final Hessian and the number of inlier correspondences.
   bool run_icp(const CloudConstPtr& source_cloud,
                const CloudConstPtr& target_cloud,
                CloudPtr& aligned_cloud,
@@ -132,7 +133,8 @@ private:
                const double& pointcloud_sigma,
                double& fitness,
                const int& icp_type,
-               Eigen::Matrix<double,6,6>& final_hessian) const;
+               Eigen::Matrix<double,6,6>& final_hessian,
+               size_t& num_inliers) const;
 
   /// Build point+normal cloud for point-to-plane ICP.
   pcl::PointCloud<pcl::PointNormal>::Ptr computePointNormalCloud(const CloudConstPtr& cloud,
@@ -244,6 +246,8 @@ private:
   double min_traveled_distance_{0.5}, min_traveled_angle_{0.524};
   int max_keyframes_{10}, min_keyframes_{3};
   int radar_history_size_{5};
+  int radar_min_inliers_{10};
+  double radar_yaw_stdev_{1.0 * M_PI / 180.0};  // rad, yaw std of radar factors
 
   //---------------- Measurements & State ----------------//
   CloudPtr uav_radar_cloud_{CloudPtr(new Cloud)};

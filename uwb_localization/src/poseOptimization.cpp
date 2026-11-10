@@ -199,6 +199,8 @@ void PoseOptimizationNode::declareParams() {
     this->declare_parameter<double>("radar_stdev", 0.1);
     this->declare_parameter<int64_t>("icp_type_radar", 2);
     this->declare_parameter<int64_t>("radar_history_size", 5);
+    this->declare_parameter<int64_t>("radar_min_inliers", 10);
+    this->declare_parameter<double>("radar_yaw_stdev_deg", 1.0);
 
     // Anchor priors: [tx, ty, tz, roll, pitch, yaw]
     this->declare_parameter<std::vector<double>>("agv_anchor_prior",
@@ -244,6 +246,10 @@ void PoseOptimizationNode::getParams() {
     this->get_parameter("min_keyframes", min_keyframes_);
     this->get_parameter("max_keyframes", max_keyframes_);
     this->get_parameter("radar_history_size", radar_history_size_);
+    this->get_parameter("radar_min_inliers", radar_min_inliers_);
+    double radar_yaw_stdev_deg = 1.0;
+    this->get_parameter("radar_yaw_stdev_deg", radar_yaw_stdev_deg);
+    radar_yaw_stdev_ = radar_yaw_stdev_deg * M_PI / 180.0;
 
     std::vector<double> agv_anchor_prior, uav_anchor_prior, uav_init_pose, agv_init_pose;
     this->get_parameter("agv_anchor_prior", agv_anchor_prior);
@@ -294,6 +300,8 @@ void PoseOptimizationNode::getParams() {
     RCLCPP_INFO(this->get_logger(), "  radar_sigma: %f", pointcloud_radar_sigma_);
     RCLCPP_INFO(this->get_logger(), "  icp_type_radar: %d", icp_type_radar_);
     RCLCPP_INFO(this->get_logger(), "  radar_history_size: %d", radar_history_size_);
+    RCLCPP_INFO(this->get_logger(), "  radar_min_inliers: %d", radar_min_inliers_);
+    RCLCPP_INFO(this->get_logger(), "  radar_yaw_stdev: %.2f deg", radar_yaw_stdev_ * 180.0 / M_PI);
 
     RCLCPP_INFO(this->get_logger(), "T_agv_anchor_prior:\n");
     logTransformationMatrix(T_agv_anchor_prior_.matrix(), this->get_logger());
@@ -557,7 +565,9 @@ bool PoseOptimizationNode::run_icp(const CloudConstPtr& source_cloud,
                                      const double& pointcloud_sigma,
                                      double& fitness,
                                      const int& icp_type,
-                                     Eigen::Matrix<double,6,6>& final_hessian) const {
+                                     Eigen::Matrix<double,6,6>& final_hessian,
+                                     size_t& num_inliers) const {
+    num_inliers = 0;
     if (icp_type == 2) {
 
         // small_gicp GICP
@@ -585,7 +595,9 @@ bool PoseOptimizationNode::run_icp(const CloudConstPtr& source_cloud,
 
         transformation = reg.getFinalTransformation();
         fitness = reg.getFitnessScore();
-        final_hessian = final_hessian + reg.getFinalHessian();
+        const auto& result = reg.getRegistrationResult();
+        final_hessian = result.H;
+        num_inliers = result.num_inliers;
         aligned_cloud = aligned;
 
         return true;
@@ -1022,8 +1034,10 @@ bool PoseOptimizationNode::addPointCloudConstraint(
     Eigen::Matrix<double,6,6> final_hessian = Eigen::Matrix<double,6,6>::Identity() * 1e-6;
     CloudPtr aligned(new Cloud);
     double fitness = 0.0;
+    size_t num_inliers = 0;
 
-    bool ok = run_icp(source_body, target_body, aligned, T_icp, sigma, fitness, icp_type, final_hessian);
+    bool ok = run_icp(source_body, target_body, aligned, T_icp, sigma, fitness, icp_type,
+                      final_hessian, num_inliers);
     if (!ok) return false;
 
     Sophus::SE3d T_icp_d = Sophus::SE3f(T_icp).cast<double>();
@@ -1036,10 +1050,25 @@ bool PoseOptimizationNode::addPointCloudConstraint(
 
     if (icp_type == 2) {
 
-        if (fitness >= 2.0 || fitness <= 0.0) return false;
-        c.covariance = (2.0 * fitness + 1e-6) * Eigen::Matrix4d::Identity();
-        c.covariance(2,2) *= 10.0;  // inflate z variance only
-        RCLCPP_INFO(this->get_logger(), "GICP converged with score: %f", fitness);
+        // Accept only alignments with enough matched points.
+        if (static_cast<int>(num_inliers) < radar_min_inliers_) {
+            RCLCPP_DEBUG(this->get_logger(), "GICP rejected: %zu inliers (< %d)", num_inliers, radar_min_inliers_);
+            return false;
+        }
+
+        // Factor covariance: a fixed sensor-noise heuristic, std radar_stdev for x/y/z and
+        // radar_yaw_stdev for yaw. On the real-world dataset this beat both the GICP Hessian
+        // (overconfident for sparse radar scans) and a residual-scaled variant; the robust
+        // loss handles the outlier tail.
+        c.covariance = Eigen::Vector4d(sigma * sigma, sigma * sigma, sigma * sigma,
+                                       radar_yaw_stdev_ * radar_yaw_stdev_).asDiagonal();
+        // Radar elevation is far less reliable than range/azimuth: inflate the z variance.
+        c.covariance(2,2) *= 10.0;
+        RCLCPP_INFO(this->get_logger(),
+                    "GICP converged with score: %f, inliers: %zu, std [x y z yaw]: [%.3f %.3f %.3f %.3f]",
+                    fitness, num_inliers,
+                    std::sqrt(c.covariance(0,0)), std::sqrt(c.covariance(1,1)),
+                    std::sqrt(c.covariance(2,2)), std::sqrt(c.covariance(3,3)));
         logTransformationMatrix(c.t_T_s.matrix(), this->get_logger());
     } 
 
