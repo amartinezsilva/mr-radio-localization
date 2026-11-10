@@ -1069,7 +1069,9 @@ void PoseOptimizationNode::globalOptCb() {
 
             //Get first measurements
             agv_measurements_.timestamp = current_time;
-            *(agv_measurements_.radar_scan) = *(agv_radar_cloud_);
+            // Store a copy per keyframe: the radar history keeps these pointers, so
+            // reusing one cloud object would make every "older" scan the newest one.
+            agv_measurements_.radar_scan = std::make_shared<Cloud>(*agv_radar_cloud_);
             // 2) grab latest radar ego-velocity from your subscriber
             agv_measurements_.radar_egovel = Eigen::Vector3d{
                 agv_radar_egovel_.twist.twist.linear.x,
@@ -1126,7 +1128,9 @@ void PoseOptimizationNode::globalOptCb() {
             prev_agv_measurements_ = agv_measurements_;
 
             uav_measurements_.timestamp = current_time;
-            *(uav_measurements_.radar_scan) = *(uav_radar_cloud_);
+            // Store a copy per keyframe: the radar history keeps these pointers, so
+            // reusing one cloud object would make every "older" scan the newest one.
+            uav_measurements_.radar_scan = std::make_shared<Cloud>(*uav_radar_cloud_);
             uav_measurements_.radar_egovel = Eigen::Vector3d{
                 uav_radar_egovel_.twist.twist.linear.x,
                 uav_radar_egovel_.twist.twist.linear.y,
@@ -1223,7 +1227,7 @@ void PoseOptimizationNode::globalOptCb() {
             agv_id_++;
             
             agv_measurements_.timestamp = current_time;
-            *(agv_measurements_.radar_scan) = *(agv_radar_cloud_);
+            agv_measurements_.radar_scan = std::make_shared<Cloud>(*agv_radar_cloud_);  // own copy per keyframe
             agv_measurements_.radar_egovel = Eigen::Vector3d{
                 agv_radar_egovel_.twist.twist.linear.x,
                 agv_radar_egovel_.twist.twist.linear.y,
@@ -1361,7 +1365,7 @@ void PoseOptimizationNode::globalOptCb() {
 
             uav_measurements_.timestamp = current_time;
 
-            *(uav_measurements_.radar_scan) = *(uav_radar_cloud_);
+            uav_measurements_.radar_scan = std::make_shared<Cloud>(*uav_radar_cloud_);  // own copy per keyframe
             uav_measurements_.radar_egovel = Eigen::Vector3d{
                 uav_radar_egovel_.twist.twist.linear.x,
                 uav_radar_egovel_.twist.twist.linear.y,
