@@ -19,10 +19,11 @@ namespace uwb_localization
     // constants. The pose of a state is built with buildSE3 (utils.hpp).
 
     // Square-root information matrix S such that ||S e||^2 = e^T cov^{-1} e,
-    // with cov = L L^T (Cholesky) and S = L^{-T}. Computed once per factor.
+    // with cov = L L^T (Cholesky) and S = L^{-1}: S^T S = L^{-T} L^{-1} = cov^{-1}.
+    // Computed once per factor.
     inline Eigen::Matrix4d sqrtInformation(const Eigen::Matrix4d& covariance) {
         Eigen::LLT<Eigen::Matrix4d> chol(covariance);
-        return Eigen::Matrix4d(chol.matrixL().transpose()).inverse();
+        return chol.matrixL().solve(Eigen::Matrix4d::Identity());
     }
 
     // Weighted 4-DoF error between a measured and a predicted pose:
