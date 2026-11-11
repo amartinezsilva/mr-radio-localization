@@ -41,7 +41,7 @@ pose_optimization_node:
     radar_topic_uav: "/uav/filtered_pointcloud" #/drone/radar/PointCloudDetection OR /uav/filtered_pointcloud
     radar_egovel_topic_uav: "/uav/Ego_Vel_Twist"
     opt_timer_rate: 10.0 #Hz
-    posegraph_backend: "ceres" #pose-graph solver: "ceres" or "gtsam" (needs uwb_localization built with GTSAM)
+    posegraph_backend: "ceres" #pose-graph solver: "ceres" or "gtsam" (same model; "gtsam" needs uwb_localization built with GTSAM >= 4.3)
     posegraph_compare_backend: "" #optional second backend that also solves every step's graph, only to compare (logged + posegraph_backend_stats.csv)
     min_traveled_distance: 0.5 #m
     min_traveled_angle: 0.262 #radians

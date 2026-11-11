@@ -113,7 +113,7 @@ public:
   }
 
   gtsam::Vector unwhitenedError(const gtsam::Values& x,
-                                boost::optional<std::vector<gtsam::Matrix>&> H = boost::none) const override {
+                                gtsam::OptionalMatrixVecType H = nullptr) const override {
     const size_t n = slots_.size();
     std::vector<gtsam::Pose3> P(n);
     std::vector<gtsam::Matrix> J(n);                  // d pose_k / d variable_k
@@ -143,22 +143,9 @@ public:
 
     // e = selected rows of log(T_meas^{-1} * T_pred). GTSAM orders the
     // tangent as [omega; v], so translation is rows 3..5 and yaw is row 2.
-    // The log itself is taken with Sophus, as in the Ceres factors: GTSAM
-    // 4.2's Rot3::Logmap is approximate for rotations within a few degrees
-    // of pi, which large (outlier) residuals do reach. Its Jacobian comes
-    // from GTSAM's closed-form LogmapDerivative, which is accurate there.
-    gtsam::Matrix66 H_between;
-    const gtsam::Pose3 T_err = T_meas_.between(T_pred, boost::none, H_between);
-    const Eigen::Matrix<double, 6, 1> xi_sophus =
-        Sophus::SE3d(T_err.rotation().matrix(), T_err.translation()).log();  // [v; omega]
-    gtsam::Vector6 xi;
-    xi << xi_sophus.tail<3>(), xi_sophus.head<3>();
-    // Pose3::LogmapDerivative(pose) would recompute the (approximate) log, so
-    // assemble it from xi the same way GTSAM does: [Jw 0; -Jw Q Jw  Jw].
-    const gtsam::Matrix3 Jw = gtsam::Rot3::LogmapDerivative(xi.head<3>());
-    const gtsam::Matrix3 Q = gtsam::Pose3::ComputeQforExpmapDerivative(xi);
-    gtsam::Matrix66 H_log;
-    H_log << Jw, gtsam::Matrix3::Zero(), -Jw * Q * Jw, Jw;
+    gtsam::Matrix66 H_between, H_log;
+    const gtsam::Pose3 T_err = T_meas_.between(T_pred, {}, H_between);
+    const gtsam::Vector6 xi = gtsam::Pose3::Logmap(T_err, H_log);
     gtsam::Vector e(4);
     e << xi[3], xi[4], xi[5], xi[2];
 

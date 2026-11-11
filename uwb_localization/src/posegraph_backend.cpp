@@ -18,7 +18,7 @@ std::unique_ptr<PoseGraphBackend> makePoseGraphBackend(const std::string& name,
     return std::make_unique<GtsamBackend>(options, logger);
 #else
     throw std::invalid_argument("pose-graph backend 'gtsam' requested, but uwb_localization was built "
-                                "without GTSAM (install ros-$ROS_DISTRO-gtsam and rebuild)");
+                                "without GTSAM (build GTSAM >= 4.3 and rebuild)");
 #endif
   }
   throw std::invalid_argument("unknown pose-graph backend '" + name + "' (expected 'ceres' or 'gtsam')");

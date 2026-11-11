@@ -130,9 +130,9 @@ TEST(GtsamFactors, CorrelatedCovariance) {
 }
 
 // Residual rotations close to pi (large outlier residuals reach them): the
-// log is taken with Sophus, so the error must still match Ceres exactly
-// (GTSAM 4.2's own Rot3::Logmap is off by ~1e-4 there), and the Jacobians
-// must still match numerical derivatives.
+// error must still match Ceres (Sophus log) exactly, and the Jacobians must
+// still match numerical derivatives. (GTSAM 4.2's Rot3::Logmap was off by
+// ~1e-4 there; 4.3 must not be.)
 TEST(GtsamFactors, NearPi) {
   auto unit = gtsam::noiseModel::Unit::Create(4);
   const Eigen::Vector4d state(1.0, 2.0, 0.5, 0.0);
@@ -152,109 +152,129 @@ TEST(GtsamFactors, NearPi) {
   }
 }
 
-// Two-robot graph: 12 nodes each (AGV planar, UAV 4-DoF), noisy odometry
-// chains, a few radar loop links, UWB-like encounters through the anchors.
-TEST(PoseGraphBackends, CeresAndGtsamAgree) {
-  const int N = 12;
-  posegraph::MapOfStates agv, uav;
-  std::vector<Sophus::SE3d> agv_true, uav_true;
-  Sophus::SE3d Ta, Tu(Sophus::SO3d::rotZ(0.5), Eigen::Vector3d(1, 2, 1.5));
-  for (int i = 0; i < N; ++i) {
-    agv_true.push_back(Ta); uav_true.push_back(Tu);
-    Ta = Ta * Sophus::SE3d(Sophus::SO3d::rotZ(0.15), Eigen::Vector3d(0.8, 0.05, 0.0));
-    Tu = Tu * Sophus::SE3d(Sophus::SO3d::rotZ(-0.1), Eigen::Vector3d(0.6, 0.1, 0.05));
-  }
-  auto make_state = [&](const Sophus::SE3d& T, bool planar) {
-    State s;
-    s.state = transformSE3ToState(T) + Eigen::Vector4d(U(-0.3, 0.3), U(-0.3, 0.3), planar ? 0.0 : U(-0.1, 0.1), U(-0.05, 0.05));
-    s.roll = 0.0; s.pitch = 0.0; s.planar = planar;
-    s.pose = buildTransformationSE3(0.0, 0.0, s.state);
-    s.covariance = Eigen::Matrix4d::Identity();
-    return s;
-  };
-  for (int i = 0; i < N; ++i) { agv[i] = make_state(agv_true[i], true); uav[i] = make_state(uav_true[i], false); }
-
-  auto noisy = [&](const Sophus::SE3d& T, double sp, double sy) {
-    return T * Sophus::SE3d(Sophus::SO3d::rotZ(U(-sy, sy)), Eigen::Vector3d(U(-sp, sp), U(-sp, sp), U(-sp, sp) * 0.2));
-  };
+// Two-robot test graph: N nodes per robot (AGV planar, UAV 4-DoF), with noisy
+// odometry chains, radar links 3 nodes back, and UWB encounters as in the node
+// (latest node of each robot, through both anchors; correlated covariance).
+struct Scenario {
+  int N = 0;
+  posegraph::MapOfStates agv, uav;          // initial guesses
   posegraph::VectorOfConstraints odom_agv, odom_uav, radar_agv, radar_uav, uwb, none;
-  auto link = [&](posegraph::VectorOfConstraints& v, int a, int b, const Sophus::SE3d& Ts, const Sophus::SE3d& Tt,
-                  double sp, double sy, double var, bool correlated = false) {
-    posegraph::MeasurementConstraint c;
-    c.id_begin = a; c.id_end = b; c.t_T_s = noisy(Tt.inverse() * Ts, sp, sy);
-    c.covariance = Eigen::Vector4d(var, var, var, var * 0.1).asDiagonal();
-    if (correlated) {  // like the UWB relative-transform covariance: x-y-yaw correlations
-      c.covariance(0, 1) = c.covariance(1, 0) = 0.5 * var;
-      c.covariance(0, 3) = c.covariance(3, 0) = 0.1 * var;
-      c.covariance(1, 3) = c.covariance(3, 1) = -0.1 * var;
-    }
-    v.push_back(c);
-  };
-  for (int i = 0; i + 1 < N; ++i) {
-    link(odom_agv, i, i + 1, agv_true[i], agv_true[i + 1], 0.05, 0.02, 0.1);
-    link(odom_uav, i, i + 1, uav_true[i], uav_true[i + 1], 0.05, 0.02, 0.1);
-  }
-  for (int i = 0; i + 3 < N; i += 2) {
-    link(radar_agv, i, i + 3, agv_true[i], agv_true[i + 3], 0.02, 0.01, 0.04);
-    link(radar_uav, i, i + 3, uav_true[i], uav_true[i + 3], 0.02, 0.01, 0.04);
-  }
-  // Anchors: true AGV/UAV odometry frames in the map frame.
-  const Sophus::SE3d A_agv(Sophus::SO3d::rotZ(3.0), Eigen::Vector3d(13, 27, 0.6));
-  const Sophus::SE3d A_uav(Sophus::SO3d::rotZ(0.03), Eigen::Vector3d(15, 23, 0.9));
-  for (int i = 0; i < N; ++i)
-    for (int j = 0; j < N; j += 3)
-      link(uwb, i, j, A_agv * agv_true[i], A_uav * uav_true[j], 0.1, 0.03, 0.2, /*correlated=*/true);
-
   State anchor_agv, anchor_uav;
-  anchor_agv.state = transformSE3ToState(A_agv) + Eigen::Vector4d(0.5, -0.4, 0.0, 0.05);
-  anchor_uav.state = transformSE3ToState(A_uav) + Eigen::Vector4d(-0.6, 0.3, 0.2, -0.05);
-  anchor_agv.roll = anchor_agv.pitch = anchor_uav.roll = anchor_uav.pitch = 0.0;
-  anchor_agv.covariance = anchor_uav.covariance = Eigen::Matrix4d::Identity();
+  posegraph::PriorConstraint prior_agv, prior_uav, prior_anchor;
 
-  posegraph::PriorConstraint prior_agv{agv_true[0], Eigen::Matrix4d::Identity() * 1e-6};
-  posegraph::PriorConstraint prior_uav{uav_true[0], Eigen::Matrix4d::Identity() * 1e-6};
-  posegraph::PriorConstraint prior_anchor{A_agv, Eigen::Matrix4d::Identity() * 1e-6};
+  explicit Scenario(int n) : N(n) {
+    std::vector<Sophus::SE3d> agv_true, uav_true;
+    Sophus::SE3d Ta, Tu(Sophus::SO3d::rotZ(0.5), Eigen::Vector3d(1, 2, 1.5));
+    for (int i = 0; i < N; ++i) {
+      agv_true.push_back(Ta); uav_true.push_back(Tu);
+      Ta = Ta * Sophus::SE3d(Sophus::SO3d::rotZ(0.15), Eigen::Vector3d(0.8, 0.05, 0.0));
+      Tu = Tu * Sophus::SE3d(Sophus::SO3d::rotZ(-0.1), Eigen::Vector3d(0.6, 0.1, 0.05));
+    }
+    auto make_state = [&](const Sophus::SE3d& T, bool planar) {
+      State s;
+      s.state = transformSE3ToState(T) + Eigen::Vector4d(U(-0.3, 0.3), U(-0.3, 0.3), planar ? 0.0 : U(-0.1, 0.1), U(-0.05, 0.05));
+      s.roll = 0.0; s.pitch = 0.0; s.planar = planar;
+      s.pose = buildTransformationSE3(0.0, 0.0, s.state);
+      s.covariance = Eigen::Matrix4d::Identity();
+      return s;
+    };
+    for (int i = 0; i < N; ++i) { agv[i] = make_state(agv_true[i], true); uav[i] = make_state(uav_true[i], false); }
 
-  // Solved to a tight tolerance, so both must reach the same minimum (with the
-  // default 1e-6 they stop ~1e-4 apart, wherever each solver happens to stop).
-  // The floor left is Ceres' parameter_tolerance (1e-8 relative, ~2e-7 m here).
+    auto noisy = [&](const Sophus::SE3d& T, double sp, double sy) {
+      return T * Sophus::SE3d(Sophus::SO3d::rotZ(U(-sy, sy)), Eigen::Vector3d(U(-sp, sp), U(-sp, sp), U(-sp, sp) * 0.2));
+    };
+    auto link = [&](posegraph::VectorOfConstraints& v, int a, int b, const Sophus::SE3d& Ts, const Sophus::SE3d& Tt,
+                    double sp, double sy, double var, bool correlated = false) {
+      posegraph::MeasurementConstraint c;
+      c.id_begin = a; c.id_end = b; c.t_T_s = noisy(Tt.inverse() * Ts, sp, sy);
+      c.covariance = Eigen::Vector4d(var, var, var, var * 0.1).asDiagonal();
+      if (correlated) {  // like the UWB relative-transform covariance: x-y-yaw correlations
+        c.covariance(0, 1) = c.covariance(1, 0) = 0.5 * var;
+        c.covariance(0, 3) = c.covariance(3, 0) = 0.1 * var;
+        c.covariance(1, 3) = c.covariance(3, 1) = -0.1 * var;
+      }
+      v.push_back(c);
+    };
+    // Anchors: true AGV/UAV odometry frames in the map frame.
+    const Sophus::SE3d A_agv(Sophus::SO3d::rotZ(3.0), Eigen::Vector3d(13, 27, 0.6));
+    const Sophus::SE3d A_uav(Sophus::SO3d::rotZ(0.03), Eigen::Vector3d(15, 23, 0.9));
+    for (int i = 1; i < N; ++i) {
+      link(odom_agv, i - 1, i, agv_true[i - 1], agv_true[i], 0.05, 0.02, 0.1);
+      link(odom_uav, i - 1, i, uav_true[i - 1], uav_true[i], 0.05, 0.02, 0.1);
+      if (i >= 3 && i % 2 == 1) {
+        link(radar_agv, i - 3, i, agv_true[i - 3], agv_true[i], 0.02, 0.01, 0.04);
+        link(radar_uav, i - 3, i, uav_true[i - 3], uav_true[i], 0.02, 0.01, 0.04);
+      }
+    }
+    for (int i = 2; i < N; ++i)
+      link(uwb, i, i, A_agv * agv_true[i], A_uav * uav_true[i], 0.1, 0.03, 0.2, /*correlated=*/true);
+
+    anchor_agv.state = transformSE3ToState(A_agv) + Eigen::Vector4d(0.5, -0.4, 0.0, 0.05);
+    anchor_uav.state = transformSE3ToState(A_uav) + Eigen::Vector4d(-0.6, 0.3, 0.2, -0.05);
+    anchor_agv.roll = anchor_agv.pitch = anchor_uav.roll = anchor_uav.pitch = 0.0;
+    anchor_agv.covariance = anchor_uav.covariance = Eigen::Matrix4d::Identity();
+
+    prior_agv = {agv_true[0], Eigen::Matrix4d::Identity() * 1e-6};
+    prior_uav = {uav_true[0], Eigen::Matrix4d::Identity() * 1e-6};
+    prior_anchor = {A_agv, Eigen::Matrix4d::Identity() * 1e-6};
+  }
+
+  // Input over (copies of) the states, with every constraint.
+  PoseGraphInput input(posegraph::MapOfStates& a, posegraph::MapOfStates& u, State& aa, State& au, int max_keyframes) {
+    PoseGraphInput in;
+    in.agv_map = &a; in.uav_map = &u; in.anchor_agv = &aa; in.anchor_uav = &au;
+    in.agv_current_id = in.uav_current_id = N - 1;
+    in.max_keyframes = max_keyframes; in.min_keyframes = 3;
+    in.prior_agv = &prior_agv; in.prior_uav = &prior_uav; in.prior_anchor_agv = &prior_anchor;
+    in.odom_agv = &odom_agv; in.odom_uav = &odom_uav; in.radar_agv = &radar_agv; in.radar_uav = &radar_uav;
+    in.encounters_uwb = &uwb; in.encounters_radar = &none;
+    return in;
+  }
+};
+
+// Solved to a tight tolerance, so the solvers must reach the same minimum
+// (with the default 1e-6 they stop ~1e-4 apart, wherever each happens to stop).
+// The floor left is Ceres' parameter_tolerance (1e-8 relative, ~2e-7 m here).
+PoseGraphBackendOptions tightOptions() {
   PoseGraphBackendOptions options;
   options.function_tolerance = 1e-14;
+  return options;
+}
+
+void expectSameState(const State& a, const State& b, double pos_tol, double yaw_tol, double cov_rel_tol,
+                     const std::string& what) {
+  EXPECT_LT((a.state.head<3>() - b.state.head<3>()).norm(), pos_tol) << what;
+  EXPECT_LT(std::abs(normalizeAngle(a.state[3] - b.state[3])), yaw_tol) << what;
+  EXPECT_LT((a.covariance - b.covariance).norm(), cov_rel_tol * a.covariance.norm() + 1e-12) << what;
+}
+
+TEST(PoseGraphBackends, CeresAndGtsamAgree) {
+  Scenario sc(12);
+  const PoseGraphBackendOptions options = tightOptions();
   // Two windows: the whole graph free, and only the last 8 nodes free (the rest constant).
   for (int max_keyframes : {100, 7}) {
-    auto run = [&](const std::string& name, posegraph::MapOfStates& a, posegraph::MapOfStates& u,
-                   State& aa, State& au, PoseGraphSolveStats& stats) {
-      PoseGraphInput in;
-      in.agv_map = &a; in.uav_map = &u; in.anchor_agv = &aa; in.anchor_uav = &au;
-      in.agv_current_id = N - 1; in.uav_current_id = N - 1;
-      in.max_keyframes = max_keyframes; in.min_keyframes = 3;
-      in.prior_agv = &prior_agv; in.prior_uav = &prior_uav; in.prior_anchor_agv = &prior_anchor;
-      in.odom_agv = &odom_agv; in.odom_uav = &odom_uav; in.radar_agv = &radar_agv; in.radar_uav = &radar_uav;
-      in.encounters_uwb = &uwb; in.encounters_radar = &none;
-      auto backend = makePoseGraphBackend(name, options, rclcpp::get_logger("test"));
-      return backend->optimize(in, stats);
-    };
-    posegraph::MapOfStates agv_c = agv, uav_c = uav, agv_g = agv, uav_g = uav;
-    State aa_c = anchor_agv, au_c = anchor_uav, aa_g = anchor_agv, au_g = anchor_uav;
-    PoseGraphSolveStats sc, sg;
-    ASSERT_TRUE(run("ceres", agv_c, uav_c, aa_c, au_c, sc));
-    ASSERT_TRUE(run("gtsam", agv_g, uav_g, aa_g, au_g, sg));
-    EXPECT_EQ(sc.num_factors, sg.num_factors);
-    EXPECT_EQ(sc.num_variables, sg.num_variables);
-    EXPECT_NEAR(sc.initial_cost, sg.initial_cost, 1e-9 * std::max(1.0, sc.initial_cost));
-    EXPECT_NEAR(sc.final_cost, sg.final_cost, 1e-10 * std::max(1.0, sc.final_cost));
-    EXPECT_TRUE(sc.covariance_ok);
-    EXPECT_TRUE(sg.covariance_ok);
+    posegraph::MapOfStates agv_c = sc.agv, uav_c = sc.uav, agv_g = sc.agv, uav_g = sc.uav;
+    State aa_c = sc.anchor_agv, au_c = sc.anchor_uav, aa_g = sc.anchor_agv, au_g = sc.anchor_uav;
+    PoseGraphInput in_c = sc.input(agv_c, uav_c, aa_c, au_c, max_keyframes);
+    PoseGraphInput in_g = sc.input(agv_g, uav_g, aa_g, au_g, max_keyframes);
+    PoseGraphSolveStats stats_c, stats_g;
+    ASSERT_TRUE(makePoseGraphBackend("ceres", options, rclcpp::get_logger("test"))->optimize(in_c, stats_c));
+    ASSERT_TRUE(makePoseGraphBackend("gtsam", options, rclcpp::get_logger("test"))->optimize(in_g, stats_g));
+    EXPECT_EQ(stats_c.num_factors, stats_g.num_factors);
+    EXPECT_EQ(stats_c.num_variables, stats_g.num_variables);
+    EXPECT_NEAR(stats_c.initial_cost, stats_g.initial_cost, 1e-9 * std::max(1.0, stats_c.initial_cost));
+    EXPECT_NEAR(stats_c.final_cost, stats_g.final_cost, 1e-10 * std::max(1.0, stats_c.final_cost));
+    EXPECT_TRUE(stats_c.covariance_ok);
+    EXPECT_TRUE(stats_g.covariance_ok);
 
-    auto cmp = [&](const State& c, const State& g, const char* what, int id) {
-      EXPECT_LT((c.state.head<3>() - g.state.head<3>()).norm(), 1e-6) << what << " " << id << " window " << max_keyframes;
-      EXPECT_LT(std::abs(normalizeAngle(c.state[3] - g.state[3])), 1e-7) << what << " " << id;
-      EXPECT_LT((c.covariance - g.covariance).norm(), 1e-5 * c.covariance.norm() + 1e-12) << what << " " << id;
-    };
-    for (int i = 0; i < N; ++i) { cmp(agv_c[i], agv_g[i], "agv", i); cmp(uav_c[i], uav_g[i], "uav", i); }
-    cmp(aa_c, aa_g, "anchor_agv", 0);
-    cmp(au_c, au_g, "anchor_uav", 0);
+    const std::string w = " (window " + std::to_string(max_keyframes) + ")";
+    for (int i = 0; i < sc.N; ++i) {
+      expectSameState(agv_c[i], agv_g[i], 1e-6, 1e-7, 1e-5, "agv " + std::to_string(i) + w);
+      expectSameState(uav_c[i], uav_g[i], 1e-6, 1e-7, 1e-5, "uav " + std::to_string(i) + w);
+    }
+    expectSameState(aa_c, aa_g, 1e-6, 1e-7, 1e-5, "anchor_agv" + w);
+    expectSameState(au_c, au_g, 1e-6, 1e-7, 1e-5, "anchor_uav" + w);
     // Planar nodes keep their z in both.
-    for (int i = 0; i < N; ++i) EXPECT_EQ(agv_g[i].state[2], agv[i].state[2]);
+    for (int i = 0; i < sc.N; ++i) EXPECT_EQ(agv_g[i].state[2], sc.agv[i].state[2]);
   }
 }

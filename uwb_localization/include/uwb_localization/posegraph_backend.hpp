@@ -7,8 +7,9 @@
 // writes the result back into the states. Two backends implement it:
 //   - CeresBackend (ceres_backend.hpp): ceres::Problem + trust-region solver.
 //   - GtsamBackend (gtsam_backend.hpp): gtsam::NonlinearFactorGraph + LM.
-//     Only built when GTSAM is found (UWB_LOCALIZATION_WITH_GTSAM).
-// Both solve exactly the same model; see the backends for the details.
+//     Only built when GTSAM >= 4.3 is found (UWB_LOCALIZATION_WITH_GTSAM).
+// Both solve exactly the same model (a keyframe sliding window whose older
+// nodes are held constant); see the backends for the details.
 
 #include <memory>
 #include <string>

@@ -22,7 +22,14 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 * [eliko_ros](https://github.com/robotics-upo/eliko_ros)
 * [ars548_ros](https://github.com/robotics-upo/ars548_ros)
 * [4D-Radar-Odom](https://github.com/robotics-upo/4D-Radar-Odom/tree/arco-drone-integration) branch ```arco_drone_integration```.
-* Optional: [GTSAM](https://github.com/borglab/gtsam) (`sudo apt install ros-$ROS_DISTRO-gtsam`), for the alternative GTSAM pose-graph backend. Without it only the Ceres backend is built. Select the backend with `posegraph_backend: "ceres"` or `"gtsam"` in the node's parameters.
+* Optional: [GTSAM](https://github.com/borglab/gtsam) **4.3 or newer**, for the GTSAM pose-graph backend. Build it from source (the ROS binary package `ros-$ROS_DISTRO-gtsam` is 4.2, too old), with the system Eigen so it matches Ceres:
+  ```bash
+  git clone --depth 1 -b 4.3.0 https://github.com/borglab/gtsam.git && cd gtsam
+  cmake -B build -DCMAKE_BUILD_TYPE=Release -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_UNSTABLE=OFF -DGTSAM_BUILD_PYTHON=OFF
+  cmake --build build -j4 && sudo cmake --install build && sudo ldconfig
+  ```
+  Without it only the Ceres backend is built. The Docker images include it. Select the backend with `posegraph_backend` in the node's parameters.
 
 Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 

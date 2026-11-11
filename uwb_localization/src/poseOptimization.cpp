@@ -710,8 +710,8 @@ Sophus::SE3d PoseOptimizationNode::integrateEgoVelIntoSE3(
 // The pose graph fuses:
 // - A prior on each robot's first node (while it is still in the window).
 // - Intra-robot odometry and radar (ICP) factors linking nodes.
-// - Inter-robot UWB factors, from the relative transform estimation, linking
-//   every pair of nodes in the window through the two anchor nodes.
+// - Inter-robot UWB factors: each new relative transform estimate links the
+//   latest node of each robot through the two anchor nodes (added once).
 // - Inter-robot radar (ICP) encounter factors.
 //
 // The node only gathers these inputs (PoseGraphInput); building and solving
@@ -719,37 +719,8 @@ Sophus::SE3d PoseOptimizationNode::integrateEgoVelIntoSE3(
 // Ceres or GTSAM. With posegraph_compare_backend set, a second backend also
 // solves a copy of the same inputs every step, for comparison only.
 
-// UWB factors between every AGV-UAV node pair (with at least one node in the
-// window), all from the latest relative transform: the odometry poses of both
-// nodes, put in the common frame through that transform, give the measured
-// relative pose of the pair.
-PoseOptimizationNode::VectorOfConstraints PoseOptimizationNode::buildUwbTrajectoryConstraints() const {
-    VectorOfConstraints constraints;
-    const Eigen::Matrix4d covariance = reduceCovarianceMatrix(latest_relative_pose_cov_);
-
-    for (const auto &[source_id, source] : agv_map_) {
-        for (const auto &[target_id, target] : uav_map_) {
-            if (posegraph::isNodeFixedKF(agv_id_, source_id, max_keyframes_, min_keyframes_) &&
-                posegraph::isNodeFixedKF(uav_id_, target_id, max_keyframes_, min_keyframes_))
-                continue;
-
-            const Sophus::SE3d w_That_target = T_agv_anchor_prior_ * latest_relative_pose_SE3_.inverse() * target.pose;
-            const Sophus::SE3d w_That_source = T_agv_anchor_prior_ * source.pose;
-
-            MeasurementConstraint c;
-            c.id_begin = source_id;
-            c.id_end = target_id;
-            c.t_T_s = w_That_target.inverse() * w_That_source;
-            c.covariance = covariance;
-            constraints.push_back(c);
-        }
-    }
-    return constraints;
-}
-
 PoseGraphInput PoseOptimizationNode::makeGraphInput(MapOfStates &agv_map, MapOfStates &uav_map,
-                                                    State &anchor_agv, State &anchor_uav,
-                                                    const VectorOfConstraints *uwb_constraints) const {
+                                                    State &anchor_agv, State &anchor_uav) const {
     PoseGraphInput in;
     in.agv_map = &agv_map;
     in.uav_map = &uav_map;
@@ -766,7 +737,7 @@ PoseGraphInput PoseOptimizationNode::makeGraphInput(MapOfStates &agv_map, MapOfS
     in.odom_uav = &proprioceptive_constraints_uav_;
     in.radar_agv = &extraceptive_constraints_agv_;
     in.radar_uav = &extraceptive_constraints_uav_;
-    in.encounters_uwb = uwb_constraints;
+    in.encounters_uwb = &encounter_constraints_uwb_;
     in.encounters_radar = &encounter_constraints_pointcloud_;
     return in;
 }
@@ -807,11 +778,6 @@ void compareSolutions(const posegraph::MapOfStates &agv_a, const posegraph::MapO
 
 bool PoseOptimizationNode::runPosegraphOptimization() {
 
-    // UWB: the latest relative transform, applied to every node pair in the window.
-    VectorOfConstraints uwb_constraints;
-    if (uwb_transform_available_) uwb_constraints = buildUwbTrajectoryConstraints();
-    const VectorOfConstraints *uwb = uwb_transform_available_ ? &uwb_constraints : nullptr;
-
     // Comparison backend: solves a copy of the same inputs (taken before the
     // main solve modifies them); its result is only compared, never used.
     MapOfStates agv_copy, uav_copy;
@@ -826,11 +792,11 @@ bool PoseOptimizationNode::runPosegraphOptimization() {
     record.agv_id = agv_id_;
     record.uav_id = uav_id_;
 
-    PoseGraphInput in = makeGraphInput(agv_map_, uav_map_, anchor_node_agv_, anchor_node_uav_, uwb);
+    PoseGraphInput in = makeGraphInput(agv_map_, uav_map_, anchor_node_agv_, anchor_node_uav_);
     const bool converged = backend_->optimize(in, record.main);
 
     if (compare_backend_) {
-        PoseGraphInput in_copy = makeGraphInput(agv_copy, uav_copy, anchor_agv_copy, anchor_uav_copy, uwb);
+        PoseGraphInput in_copy = makeGraphInput(agv_copy, uav_copy, anchor_agv_copy, anchor_uav_copy);
         const bool converged_copy = compare_backend_->optimize(in_copy, record.compare);
         record.has_compare = true;
         if (converged && converged_copy) {
@@ -1431,9 +1397,10 @@ void PoseOptimizationNode::globalOptCb() {
         //Check if there is a new relative position available //TODO: second condition would be new value has arrived
         uwb_transform_available_ = relative_pose_initialized_ && last_relative_pose_time_sec_ > last_relative_pose_used_time_sec_;
 
+        // Each new relative transform estimate becomes one factor between the
+        // latest AGV and UAV nodes, through both anchors (see AnchorResidual).
         if(uwb_transform_available_){
-            
-            // RCLCPP_INFO(this->get_logger(), "UWB transform available");
+
             last_relative_pose_used_time_sec_ = last_relative_pose_time_sec_;
 
             latest_relative_pose_SE3_ = transformSE3FromPoseMsg(latest_relative_pose_.pose.pose);

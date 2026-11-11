@@ -27,16 +27,17 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
-# GTSAM is optional: without it only the Ceres pose-graph backend is built
-# (posegraph_backend: "gtsam" then fails at startup with a clear message).
+# GTSAM (>= 4.3, built from source: the ROS binary package is 4.2) is
+# optional: without it only the Ceres pose-graph backend is built (asking for
+# a GTSAM backend then fails at startup with a clear message).
 option(UWB_LOCALIZATION_WITH_GTSAM "Build the GTSAM pose-graph backend if GTSAM is found" ON)
 if(UWB_LOCALIZATION_WITH_GTSAM)
-  find_package(GTSAM QUIET)
+  find_package(GTSAM 4.3 QUIET)
 endif()
 if(GTSAM_FOUND)
   message(STATUS "uwb_localization: GTSAM ${GTSAM_VERSION} found, building the GTSAM pose-graph backend")
 else()
-  message(STATUS "uwb_localization: GTSAM not found/disabled, building the Ceres pose-graph backend only")
+  message(STATUS "uwb_localization: GTSAM >= 4.3 not found/disabled, building the Ceres pose-graph backend only")
 endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}

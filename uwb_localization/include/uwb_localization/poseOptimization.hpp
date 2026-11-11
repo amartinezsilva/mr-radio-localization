@@ -150,13 +150,9 @@ private:
                                       const Sophus::SE3d& odom_T_t,
                                       double dt);
 
-  /// UWB factors for every AGV-UAV node pair in the window, from the latest relative transform.
-  VectorOfConstraints buildUwbTrajectoryConstraints() const;
-
   /// Pose-graph inputs over the given states (the node's own, or copies of them).
   PoseGraphInput makeGraphInput(MapOfStates& agv_map, MapOfStates& uav_map,
-                                State& anchor_agv, State& anchor_uav,
-                                const VectorOfConstraints* uwb_constraints) const;
+                                State& anchor_agv, State& anchor_uav) const;
 
   /// Solves the pose graph with the configured backend; updates states and
   /// covariances. Returns true on convergence.
