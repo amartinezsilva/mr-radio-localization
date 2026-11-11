@@ -12,7 +12,6 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <sophus/se3.hpp>
-#include <ceres/ceres.h>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -22,7 +21,7 @@
 
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/posegraph.hpp"
-#include "uwb_localization/CostFunctions.hpp"
+#include "uwb_localization/posegraph_backend.hpp"
 
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -32,7 +31,8 @@ namespace uwb_localization {
 /**
  * @brief Pose-graph fusion of AGV & UAV odom, radar (ICP/GICP), and UWB encounters.
  *
- * Declarations only; see optimizerNodeFusion.cpp for definitions.
+ * Declarations only; see poseOptimization.cpp for definitions. The pose graph
+ * itself is solved by a PoseGraphBackend (Ceres or GTSAM, posegraph_backend.hpp).
  */
 class PoseOptimizationNode : public rclcpp::Node {
 public:
@@ -62,8 +62,12 @@ public:
   /// Returns the UAV pose graph as a message array.
   PoseWithCovArray getUAVPoseGraph();
 
-  /// Logs aggregate Ceres metrics (runs, avg, stddev).
+  /// Logs aggregate solver metrics (runs, avg, stddev).
   void getMetrics() const;
+
+  /// Writes one CSV row per optimization step: solver stats of the backend
+  /// (and of the comparison backend, with the largest solution differences).
+  void writeBackendStats(const std::string& filename) const;
 
 private:
   //---------------- Parameter management ----------------//
@@ -146,62 +150,17 @@ private:
                                       const Sophus::SE3d& odom_T_t,
                                       double dt);
 
-  /// Add intra-robot constraints (odom/ICP) to Ceres problem.
-  bool addMeasurementConstraints(ceres::Problem& problem,
-                                 const VectorOfConstraints& constraints,
-                                 MapOfStates& map,
-                                 const int& current_id,
-                                 const int& max_keyframes,
-                                 ceres::LossFunction* loss);
+  /// UWB factors for every AGV-UAV node pair in the window, from the latest relative transform.
+  VectorOfConstraints buildUwbTrajectoryConstraints() const;
 
-  /// Add inter-robot (encounter) constraints to Ceres problem (single-pair).
-  bool addEncounterConstraints(ceres::Problem& problem,
-                               const VectorOfConstraints& constraints,
-                               MapOfStates& source_map,
-                               MapOfStates& target_map,
-                               const int& source_current_id,
-                               const int& target_current_id,
-                               const int& max_keyframes,
-                               ceres::LossFunction* loss);
+  /// Pose-graph inputs over the given states (the node's own, or copies of them).
+  PoseGraphInput makeGraphInput(MapOfStates& agv_map, MapOfStates& uav_map,
+                                State& anchor_agv, State& anchor_uav,
+                                const VectorOfConstraints* uwb_constraints) const;
 
-  /// Add inter-robot (encounter) constraints to all nodes in the window.
-  bool addEncounterTrajectoryConstraints(ceres::Problem& problem,
-                                         MapOfStates& source_map,
-                                         MapOfStates& target_map,
-                                         const int& source_current_id,
-                                         const int& target_current_id,
-                                         const int& max_keyframes,
-                                         ceres::LossFunction* loss);
-
-  /// Build & solve the pose graph with Ceres; updates states & covariances.
-  /// Runs buildPosegraphProblem -> solvePosegraph -> updatePosegraphCovariances.
-  bool runPosegraphOptimization(MapOfStates& agv_map,
-                                MapOfStates& uav_map,
-                                const VectorOfConstraints& proprioceptive_constraints_agv,
-                                const VectorOfConstraints& extraceptive_constraints_agv,
-                                const VectorOfConstraints& proprioceptive_constraints_uav,
-                                const VectorOfConstraints& extraceptive_constraints_uav,
-                                const VectorOfConstraints& encounter_constraints_uwb,
-                                const VectorOfConstraints& encounter_constraints_pointcloud);
-
-  /// Adds the nodes (with sliding-window freezing), priors and all factors to `problem`.
-  void buildPosegraphProblem(ceres::Problem& problem,
-                             MapOfStates& agv_map,
-                             MapOfStates& uav_map,
-                             const VectorOfConstraints& proprioceptive_constraints_agv,
-                             const VectorOfConstraints& extraceptive_constraints_agv,
-                             const VectorOfConstraints& proprioceptive_constraints_uav,
-                             const VectorOfConstraints& extraceptive_constraints_uav,
-                             const VectorOfConstraints& encounter_constraints_uwb,
-                             const VectorOfConstraints& encounter_constraints_pointcloud);
-
-  /// Solves `problem`; returns true on convergence and records solver metrics.
-  bool solvePosegraph(ceres::Problem& problem);
-
-  /// Updates the covariance of every optimized (non-constant) node and anchor.
-  void updatePosegraphCovariances(ceres::Problem& problem,
-                                  MapOfStates& agv_map,
-                                  MapOfStates& uav_map);
+  /// Solves the pose graph with the configured backend; updates states and
+  /// covariances. Returns true on convergence.
+  bool runPosegraphOptimization();
 
 private:
   //---------------- Subscriptions ----------------//
@@ -303,6 +262,19 @@ private:
   double uav_rotation_{0.0}, agv_rotation_{0.0};
 
   rclcpp::Time graph_start_time_;
+
+  // Pose-graph backends
+  std::string backend_name_{"ceres"}, compare_backend_name_;
+  std::unique_ptr<PoseGraphBackend> backend_, compare_backend_;
+
+  struct BackendStepRecord {
+    double time = 0.0;
+    int agv_id = 0, uav_id = 0;
+    PoseGraphSolveStats main, compare;
+    bool has_compare = false;
+    double max_dpos = 0.0, max_dyaw = 0.0, max_dcov = 0.0;
+  };
+  std::vector<BackendStepRecord> backend_records_;
 
   // Metrics
   int total_solves_{0};

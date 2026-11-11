@@ -22,6 +22,7 @@ Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging
 * [eliko_ros](https://github.com/robotics-upo/eliko_ros)
 * [ars548_ros](https://github.com/robotics-upo/ars548_ros)
 * [4D-Radar-Odom](https://github.com/robotics-upo/4D-Radar-Odom/tree/arco-drone-integration) branch ```arco_drone_integration```.
+* Optional: [GTSAM](https://github.com/borglab/gtsam) (`sudo apt install ros-$ROS_DISTRO-gtsam`), for the alternative GTSAM pose-graph backend. Without it only the Ceres backend is built. Select the backend with `posegraph_backend: "ceres"` or `"gtsam"` in the node's parameters.
 
 Please follow the links above to the mentioned packages for specific setup instructions for each of them. 
 

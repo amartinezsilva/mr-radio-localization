@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
   posegraph::writePoseGraphToCSV(agv_pose_graph, "agv_pose_graph.csv");
   posegraph::writePoseGraphToCSV(uav_pose_graph, "uav_pose_graph.csv");
 
+  node->writeBackendStats("posegraph_backend_stats.csv");
   node->getMetrics();
 
   rclcpp::shutdown();
