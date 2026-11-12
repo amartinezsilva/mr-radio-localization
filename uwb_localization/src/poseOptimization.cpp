@@ -213,6 +213,17 @@ void PoseOptimizationNode::declareParams() {
     this->declare_parameter<int64_t>("radar_min_inliers", 10);
     this->declare_parameter<double>("radar_yaw_stdev_deg", 1.0);
 
+    // Odometry factor noise per keyframe step (posegraph::OdometryNoise), per
+    // robot. Typical values: a few % of the keyframe distance in translation,
+    // under 1 deg in yaw (from the IMU / DJI attitude).
+    auto declare_odom_noise = [this](const std::string &p, double sigma_xy, double sigma_z, double sigma_yaw_deg) {
+        this->declare_parameter<double>(p + ".sigma_xy", sigma_xy);
+        this->declare_parameter<double>(p + ".sigma_z", sigma_z);
+        this->declare_parameter<double>(p + ".sigma_yaw_deg", sigma_yaw_deg);
+    };
+    declare_odom_noise("odom_noise_agv", 0.025, 0.015, 0.8);
+    declare_odom_noise("odom_noise_uav", 0.045, 0.045, 0.8);
+
     // Pose-graph backend: "ceres" or "gtsam". An optional second backend
     // solves a copy of every step's graph, only to compare against.
     this->declare_parameter<std::string>("posegraph_backend", "ceres");
@@ -266,6 +277,18 @@ void PoseOptimizationNode::getParams() {
     double radar_yaw_stdev_deg = 1.0;
     this->get_parameter("radar_yaw_stdev_deg", radar_yaw_stdev_deg);
     radar_yaw_stdev_ = radar_yaw_stdev_deg * M_PI / 180.0;
+
+    auto get_odom_noise = [this](const std::string &p, posegraph::OdometryNoise &n) {
+        double sigma_yaw_deg = 0.0;
+        this->get_parameter(p + ".sigma_xy", n.sigma_xy);
+        this->get_parameter(p + ".sigma_z", n.sigma_z);
+        this->get_parameter(p + ".sigma_yaw_deg", sigma_yaw_deg);
+        n.sigma_yaw = sigma_yaw_deg * M_PI / 180.0;
+        RCLCPP_INFO(this->get_logger(), "  %s: sigma_xy %.3f m, sigma_z %.3f m, sigma_yaw %.2f deg",
+                    p.c_str(), n.sigma_xy, n.sigma_z, sigma_yaw_deg);
+    };
+    get_odom_noise("odom_noise_agv", odom_noise_agv_);
+    get_odom_noise("odom_noise_uav", odom_noise_uav_);
 
     this->get_parameter("posegraph_backend", backend_name_);
     this->get_parameter("posegraph_compare_backend", compare_backend_name_);
@@ -369,10 +392,6 @@ void PoseOptimizationNode::agvOdomCb(const nav_msgs::msg::Odometry::SharedPtr ms
     agv_translation_ += log.head<3>().norm();
     agv_rotation_ += log.tail<3>().norm();
 
-    Eigen::Matrix<double,6,6> cov;
-    for (int i = 0; i < 6; i++)
-    for (int j = 0; j < 6; j++) cov(i,j) = msg->pose.covariance[i*6 + j];
-    agv_odom_covariance_ = cov;
     last_agv_odom_pose_ = agv_odom_pose_;
     last_agv_odom_time_sec_ = rclcpp::Time(msg->header.stamp).seconds();
 }
@@ -403,10 +422,6 @@ void PoseOptimizationNode::uavOdomCb(const nav_msgs::msg::Odometry::SharedPtr ms
     uav_translation_ += log.head<3>().norm();
     uav_rotation_ += log.tail<3>().norm();
 
-    Eigen::Matrix<double,6,6> cov;
-    for (int i = 0; i < 6; i++)
-    for (int j = 0; j < 6; j++) cov(i,j) = msg->pose.covariance[i*6 + j];
-    uav_odom_covariance_ = cov;
     last_uav_odom_pose_ = uav_odom_pose_;
     last_uav_odom_time_sec_ = rclcpp::Time(msg->header.stamp).seconds();
 }
@@ -481,40 +496,6 @@ PoseOptimizationNode::CloudPtr PoseOptimizationNode::preprocessPointCloud(
     CloudPtr output = small_gicp::voxelgrid_sampling_omp(*input_cloud, leaf_size);
     RCLCPP_DEBUG(this->get_logger(), "Pointcloud downsampled to %zu points", output->points.size());
     return output;
-
-}
-
-Eigen::Matrix4d PoseOptimizationNode::computeRelativeOdometryCovariance(
-    const Sophus::SE3d& pose_target, const Sophus::SE3d& pose_source,
-    const Eigen::Matrix<double,6,6>& cov_target, const Eigen::Matrix<double,6,6>& cov_source) {
-  
-    Eigen::Matrix3d R_target = pose_target.rotationMatrix();
-    Eigen::Vector3d t_target = pose_target.translation();
-    Eigen::Vector3d t_source = pose_source.translation();
-
-    Eigen::Vector3d euler_target = R_target.eulerAngles(2,1,0);
-    double theta_t = euler_target[0];
-    double dx = t_source[0] - t_target[0];
-    double dy = t_source[1] - t_target[1];
-
-    Eigen::Matrix4d J_s = Eigen::Matrix4d::Zero();
-    J_s(0,0) =  std::cos(theta_t); J_s(0,1) =  std::sin(theta_t);
-    J_s(1,0) = -std::sin(theta_t); J_s(1,1) =  std::cos(theta_t);
-    J_s(2,2) = 1.0; J_s(3,3) = 1.0;
-
-    Eigen::Matrix4d J_t = Eigen::Matrix4d::Zero();
-    J_t(0,0) = -std::cos(theta_t); J_t(0,1) = -std::sin(theta_t);
-    J_t(1,0) =  std::sin(theta_t); J_t(1,1) = -std::cos(theta_t);
-    J_t(2,2) = -1.0; J_t(3,3) = -1.0;
-    J_t(0,3) = -(-std::sin(theta_t) * dx + std::cos(theta_t) * dy);
-    J_t(1,3) = -(-std::cos(theta_t) * dx - std::sin(theta_t) * dy);
-
-    Eigen::Matrix4d cov_source_reduced = reduceCovarianceMatrix(cov_source);
-    Eigen::Matrix4d cov_target_reduced = reduceCovarianceMatrix(cov_target);
-
-    Eigen::Matrix4d cov_rel = J_s * cov_source_reduced * J_s.transpose()
-                        + J_t * cov_target_reduced * J_t.transpose();
-    return cov_rel;
 
 }
 
@@ -832,6 +813,52 @@ bool PoseOptimizationNode::runPosegraphOptimization() {
     return true;
 }
 
+void PoseOptimizationNode::writePoseGraphDump(const std::string &filename) const {
+    std::ofstream file(filename);
+    if (!file.is_open()) return;
+    file << std::setprecision(17);
+
+    auto pose = [&](const Sophus::SE3d &T) {
+        const Eigen::Quaterniond q = T.unit_quaternion();
+        file << " " << T.translation().x() << " " << T.translation().y() << " " << T.translation().z()
+             << " " << q.x() << " " << q.y() << " " << q.z() << " " << q.w();
+    };
+    auto cov = [&](const Eigen::Matrix4d &C) {
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) file << " " << C(i, j);
+    };
+    auto state = [&](const State &s, bool planar) {
+        file << " " << planar << " " << s.roll << " " << s.pitch << " "
+             << s.state[0] << " " << s.state[1] << " " << s.state[2] << " " << s.state[3] << "\n";
+    };
+
+    for (const auto &[id, s] : agv_map_) { file << "node a " << id; state(s, s.planar); }
+    for (const auto &[id, s] : uav_map_) { file << "node u " << id; state(s, s.planar); }
+    // The AGV anchor is planar, the UAV anchor 4-DoF (as in the backends).
+    file << "anchor a"; state(anchor_node_agv_, true);
+    file << "anchor u"; state(anchor_node_uav_, false);
+
+    auto prior = [&](const char *name, const PriorConstraint &p) {
+        file << "prior " << name; pose(p.pose); cov(p.covariance); file << "\n";
+    };
+    prior("agv", prior_agv_);
+    prior("uav", prior_uav_);
+    prior("anchor_agv", prior_anchor_agv_);
+
+    auto factors = [&](const char *group, const VectorOfConstraints &v) {
+        for (const auto &c : v) {
+            file << "factor " << group << " " << c.id_begin << " " << c.id_end;
+            pose(c.t_T_s); cov(c.covariance); file << "\n";
+        }
+    };
+    factors("odom_agv", proprioceptive_constraints_agv_);
+    factors("odom_uav", proprioceptive_constraints_uav_);
+    factors("radar_agv", extraceptive_constraints_agv_);
+    factors("radar_uav", extraceptive_constraints_uav_);
+    factors("uwb", encounter_constraints_uwb_);
+    factors("radar_encounter", encounter_constraints_pointcloud_);
+}
+
 void PoseOptimizationNode::writeBackendStats(const std::string &filename) const {
     std::ofstream file(filename);
     if (!file.is_open()) return;
@@ -980,7 +1007,6 @@ void PoseOptimizationNode::globalOptCb() {
                 agv_radar_egovel_.twist.twist.linear.z
             };
             agv_measurements_.odom_pose = agv_odom_pose_;
-            agv_measurements_.odom_covariance = agv_odom_covariance_;
 
             agv_measurements_.odom_ok  = current_time_sec - last_agv_odom_time_sec_ <= measurement_sync_thr_;
             agv_measurements_.radar_ok = current_time_sec - last_agv_radar_time_sec_ <= measurement_sync_thr_;
@@ -1038,7 +1064,6 @@ void PoseOptimizationNode::globalOptCb() {
                 uav_radar_egovel_.twist.twist.linear.z
             };
             uav_measurements_.odom_pose = uav_odom_pose_;
-            uav_measurements_.odom_covariance = uav_odom_covariance_;
 
             uav_measurements_.odom_ok  = current_time_sec - last_uav_odom_time_sec_ <= measurement_sync_thr_;
             uav_measurements_.radar_ok = current_time_sec - last_uav_radar_time_sec_ <= measurement_sync_thr_;
@@ -1136,7 +1161,6 @@ void PoseOptimizationNode::globalOptCb() {
             };
 
             agv_measurements_.odom_pose = agv_odom_pose_;
-            agv_measurements_.odom_covariance = agv_odom_covariance_;
 
             agv_measurements_.odom_ok  = current_time_sec - last_agv_odom_time_sec_ <= measurement_sync_thr_;
             agv_measurements_.radar_ok = current_time_sec - last_agv_radar_time_sec_ <= measurement_sync_thr_;
@@ -1191,10 +1215,7 @@ void PoseOptimizationNode::globalOptCb() {
                 Sophus::SE3d odom_T_t_agv = agv_measurements_.odom_pose;
                 constraint_odom_agv.t_T_s = odom_T_t_agv.inverse()*odom_T_s_agv;
 
-                // constraint_odom_agv.covariance = computeRelativeOdometryCovariance(agv_measurements_.odom_pose, prev_agv_measurements_.odom_pose,
-                //                                                                     agv_measurements_.odom_covariance, prev_agv_measurements_.odom_covariance);
-
-                constraint_odom_agv.covariance = Eigen::Matrix4d::Identity()*0.1;
+                constraint_odom_agv.covariance = odom_noise_agv_.covariance();
 
                 proprioceptive_constraints_agv_.push_back(constraint_odom_agv);
             }
@@ -1273,7 +1294,6 @@ void PoseOptimizationNode::globalOptCb() {
                 uav_radar_egovel_.twist.twist.linear.z
             };
             uav_measurements_.odom_pose = uav_odom_pose_;
-            uav_measurements_.odom_covariance = uav_odom_covariance_;
 
             uav_measurements_.odom_ok  = current_time_sec - last_uav_odom_time_sec_ <= measurement_sync_thr_;
             uav_measurements_.radar_ok = current_time_sec - last_uav_radar_time_sec_ <= measurement_sync_thr_;
@@ -1327,10 +1347,7 @@ void PoseOptimizationNode::globalOptCb() {
                 Sophus::SE3d odom_T_t_uav = uav_measurements_.odom_pose;
                 constraint_odom_uav.t_T_s = odom_T_t_uav.inverse()*odom_T_s_uav;
 
-                // constraint_odom_uav.covariance = computeRelativeOdometryCovariance(uav_measurements_.odom_pose, prev_uav_measurements_.odom_pose,
-                //                                                                     uav_measurements_.odom_covariance, prev_uav_measurements_.odom_covariance);
-                
-                constraint_odom_uav.covariance = Eigen::Matrix4d::Identity()*0.1;
+                constraint_odom_uav.covariance = odom_noise_uav_.covariance();
                 proprioceptive_constraints_uav_.push_back(constraint_odom_uav);
             }
 

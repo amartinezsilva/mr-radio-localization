@@ -48,6 +48,15 @@ pose_optimization_node:
     min_keyframes: 3
     max_keyframes: 7
     using_odom: true
+    # Odometry factor noise per keyframe step (std per axis, constant: keyframes are evenly spaced)
+    odom_noise_agv: # wheel odometry + IMU orientation
+        sigma_xy: 0.025 #m
+        sigma_z: 0.015 #m
+        sigma_yaw_deg: 0.8
+    odom_noise_uav: # DJI velocity integration + attitude
+        sigma_xy: 0.045 #m
+        sigma_z: 0.045 #m
+        sigma_yaw_deg: 0.8
     using_radar: true
     radar_stdev: 0.2
     icp_type_radar: 2 #ICP algorithm variant: 2->Generalized ICP, 1->Point to Plane ICP, else -> basic ICP

@@ -59,8 +59,6 @@ namespace posegraph
     struct Measurements {
         rclcpp::Time timestamp;      // The time at which the measurement was taken.
         Sophus::SE3d odom_pose;
-        
-        Eigen::Matrix<double, 6, 6> odom_covariance;
       
         // Pointer to an associated point cloud (keyframe scan).
         pcl::PointCloud<pcl::PointXYZ>::Ptr radar_scan;
@@ -147,6 +145,21 @@ namespace posegraph
             }
             file.close();
     }
+
+    // Odometry noise of one keyframe step: a constant std per axis. Keyframes
+    // are created every min_traveled_distance / min_traveled_angle, so the
+    // motion (and the odometry drift) between them is nearly the same for all.
+    // Diagonal, in the target node's frame (the frame of the odometry factor).
+    struct OdometryNoise {
+        double sigma_xy = 0.025;                    // m
+        double sigma_z = 0.015;                     // m
+        double sigma_yaw = 0.8 * M_PI / 180.0;      // rad
+
+        Eigen::Matrix4d covariance() const {
+            return Eigen::Vector4d(sigma_xy * sigma_xy, sigma_xy * sigma_xy, sigma_z * sigma_z,
+                                   sigma_yaw * sigma_yaw).asDiagonal();
+        }
+    };
 
     inline bool isRecent(const rclcpp::Time &current_time, const rclcpp::Time &measurement_time, const double threshold){
         return (current_time - measurement_time).seconds() < threshold;

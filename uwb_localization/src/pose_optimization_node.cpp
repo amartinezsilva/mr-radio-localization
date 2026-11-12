@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
   posegraph::writePoseGraphToCSV(uav_pose_graph, "uav_pose_graph.csv");
 
   node->writeBackendStats("posegraph_backend_stats.csv");
+  node->writePoseGraphDump("posegraph_dump.txt");
   node->getMetrics();
 
   rclcpp::shutdown();

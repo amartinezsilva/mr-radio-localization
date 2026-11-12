@@ -69,6 +69,16 @@ public:
   /// (and of the comparison backend, with the largest solution differences).
   void writeBackendStats(const std::string& filename) const;
 
+  /// Writes the whole pose graph (final states, priors, every factor with its
+  /// measurement and covariance) as text, for offline analysis (e.g. noise
+  /// calibration). One record per line:
+  ///   node <a|u> <id> <planar> <roll> <pitch> <x> <y> <z> <yaw>
+  ///   anchor <a|u> <planar> <roll> <pitch> <x> <y> <z> <yaw>
+  ///   prior <agv|uav|anchor_agv> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  ///   factor <group> <id_begin> <id_end> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  /// with group odom_agv, odom_uav, radar_agv, radar_uav, uwb or radar_encounter.
+  void writePoseGraphDump(const std::string& filename) const;
+
 private:
   //---------------- Parameter management ----------------//
   void declareParams();
@@ -115,12 +125,6 @@ private:
                                 float meanK = 50.0f,
                                 float stdevmulthresh = 2.0f,
                                 float leaf_size = 0.05f);
-
-  /// Propagate 6x6 odom covariances to reduced 4x4 (x,y,z,yaw) relative covariance.
-  Eigen::Matrix4d computeRelativeOdometryCovariance(const Sophus::SE3d& pose_target,
-                                                    const Sophus::SE3d& pose_source,
-                                                    const Eigen::Matrix<double,6,6>& cov_target,
-                                                    const Eigen::Matrix<double,6,6>& cov_source);
 
   /// Approximate ICP covariance (reduced 4x4) from correspondences.
   Eigen::Matrix4d computeICPCovariance(const CloudConstPtr& source,
@@ -242,7 +246,7 @@ private:
   Sophus::SE3d agv_init_pose_, uav_init_pose_;
   Sophus::SE3d uav_radar_odom_pose_, agv_radar_odom_pose_;
 
-  Eigen::Matrix<double,6,6> uav_odom_covariance_, agv_odom_covariance_;
+  posegraph::OdometryNoise odom_noise_agv_, odom_noise_uav_;
 
   // Timing
   double measurement_sync_thr_{0.25};
