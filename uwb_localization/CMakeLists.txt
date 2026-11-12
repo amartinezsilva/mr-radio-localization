@@ -17,7 +17,6 @@ find_package(Ceres REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(small_gicp REQUIRED)
 find_package(Boost REQUIRED date_time)
-find_package(Qt5OpenGL REQUIRED)
 find_package(PCL REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -41,9 +40,8 @@ else()
 endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/UpdatePointClouds.srv"
   "msg/PoseWithCovarianceStampedArray.msg"
-  DEPENDENCIES std_msgs sensor_msgs geometry_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
 # Public include dir for headers (install + build)
@@ -144,13 +142,6 @@ ament_target_dependencies(global_opt_node_eliko
   rclcpp std_msgs geometry_msgs nav_msgs tf2_ros tf2_geometry_msgs eliko_messages
 )
 
-#PCL Visualizer executable
-add_executable(pcl_visualizer src/PCLVisualizer.cpp)
-target_include_directories(pcl_visualizer PUBLIC ${PUBLIC_INC})
-target_compile_features(pcl_visualizer PUBLIC c_std_99 cxx_std_17)
-ament_target_dependencies(pcl_visualizer rclcpp std_msgs sensor_msgs pcl_ros pcl_conversions)
-rosidl_target_interfaces(pcl_visualizer ${PROJECT_NAME} "rosidl_typesupport_cpp")
-
 #UAV and AGV odometry nodes
 add_executable(uav_odometry_node src/uav_odometry_node.cpp)
 target_include_directories(uav_odometry_node PUBLIC ${PUBLIC_INC})
@@ -168,7 +159,6 @@ ament_target_dependencies(agv_odometry_node rclcpp geometry_msgs sensor_msgs nav
 install(TARGETS
   pose_optimization_node
   global_opt_node_eliko
-  pcl_visualizer
   uav_odometry_node
   agv_odometry_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}

@@ -79,8 +79,6 @@ PoseOptimizationNode::PoseOptimizationNode() : rclcpp::Node("pose_optimization_n
             egovel_topic_radar_uav_, qos, std::bind(&PoseOptimizationNode::UavEgoVelCb, this, _1));
     }
 
-    pcl_visualizer_client_ = this->create_client<UpdatePointClouds>(
-        "eliko_optimization_node/pcl_visualizer_service");
 
     optimized_tf_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
         "/eliko_optimization_node/optimized_T", 10,
@@ -895,37 +893,12 @@ void PoseOptimizationNode::writeBackendStats(const std::string &filename) const 
     }
 }
 
-// --------------------- visualization service --------------------- //
-void PoseOptimizationNode::sendPointCloudServiceRequest(const CloudConstPtr& source_cloud,
-                                                          const CloudConstPtr& target_cloud,
-                                                          const CloudConstPtr& aligned_cloud) {
-    sensor_msgs::msg::PointCloud2 source_msg, target_msg, aligned_msg;
-    pcl::toROSMsg(*source_cloud, source_msg);
-    pcl::toROSMsg(*target_cloud, target_msg);
-    pcl::toROSMsg(*aligned_cloud, aligned_msg);
-
-    auto request = std::make_shared<UpdatePointClouds::Request>();
-    request->source_cloud = source_msg;
-    request->target_cloud = target_msg;
-    request->aligned_cloud = aligned_msg;
-
-    auto cb = [this](rclcpp::Client<UpdatePointClouds>::SharedFuture result) {
-    if (result.get()->success) {
-        RCLCPP_INFO(this->get_logger(), "Visualizer updated successfully.");
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Visualizer update failed: %s", result.get()->message.c_str());
-    }
-    };
-
-    (void)pcl_visualizer_client_->async_send_request(request, cb);
-}
-
 // --------------------- point cloud constraint builder --------------------- //
 bool PoseOptimizationNode::addPointCloudConstraint(
     const CloudConstPtr& source_scan, const CloudConstPtr& target_scan,
     const Sophus::SE3d& T_source_sensor, const Sophus::SE3d& T_target_sensor,
     double sigma, int icp_type, int id_source, int id_target,
-    VectorOfConstraints& constraints_list, bool send_visualization,
+    VectorOfConstraints& constraints_list,
     const Eigen::Matrix4f* initial_guess) {
 
     auto source_body = transformCloudToBody(source_scan, T_source_sensor);
@@ -979,7 +952,6 @@ bool PoseOptimizationNode::addPointCloudConstraint(
     }
 
     constraints_list.push_back(c);
-    if (send_visualization) sendPointCloudServiceRequest(source_scan, target_scan, aligned);
     return true;
 }
 
@@ -1269,7 +1241,7 @@ void PoseOptimizationNode::globalOptCb() {
                                                     T_agv_imu_, T_agv_imu_, pointcloud_radar_sigma_,
                                                     icp_type_radar_,
                                                     olderKF.KF_id, radar_agv.KF_id,
-                                                    extraceptive_constraints_agv_, /*send_visualization=*/false,
+                                                    extraceptive_constraints_agv_,
                                                     &T_icp))
                         {
                             RCLCPP_WARN(this->get_logger(), "Failed to add radar constraint between KF %d and KF %d", olderKF.KF_id, radar_agv.KF_id);
@@ -1397,7 +1369,7 @@ void PoseOptimizationNode::globalOptCb() {
                                                     T_uav_imu_, T_uav_imu_, pointcloud_radar_sigma_,
                                                     icp_type_radar_,
                                                     olderKF.KF_id, radar_uav.KF_id,
-                                                    extraceptive_constraints_uav_, false,
+                                                    extraceptive_constraints_uav_,
                                                     &T_icp))
                         {
                             RCLCPP_WARN(this->get_logger(), "Failed to add radar constraint between KF %d and KF %d", olderKF.KF_id, radar_uav.KF_id);

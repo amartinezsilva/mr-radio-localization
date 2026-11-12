@@ -17,7 +17,6 @@
 #include <pcl/point_types.h>
 
 #include "uwb_localization/msg/pose_with_covariance_stamped_array.hpp"
-#include "uwb_localization/srv/update_point_clouds.hpp"
 
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/posegraph.hpp"
@@ -36,7 +35,6 @@ namespace uwb_localization {
  */
 class PoseOptimizationNode : public rclcpp::Node {
 public:
-  using UpdatePointClouds = uwb_localization::srv::UpdatePointClouds;
   using PoseWithCovArray = uwb_localization::msg::PoseWithCovarianceStampedArray;
 
   // Pose graph/optimizer aliases
@@ -113,13 +111,7 @@ private:
                                int id_source,
                                int id_target,
                                VectorOfConstraints& constraints_list,
-                               bool send_visualization = false,
                                const Eigen::Matrix4f* initial_guess = nullptr);
-
-  /// Send point clouds to external visualizer service (optional).
-  void sendPointCloudServiceRequest(const CloudConstPtr& source_cloud,
-                                    const CloudConstPtr& target_cloud,
-                                    const CloudConstPtr& aligned_cloud);
 
   /// Downsampling / (optional) outlier removal.
   CloudPtr preprocessPointCloud(const CloudConstPtr& input_cloud,
@@ -187,7 +179,6 @@ private:
 
 
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-  rclcpp::Client<UpdatePointClouds>::SharedPtr pcl_visualizer_client_;
   rclcpp::TimerBase::SharedPtr global_optimization_timer_;
 
   //---------------- Parameters ----------------//
