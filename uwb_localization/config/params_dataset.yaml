@@ -35,10 +35,10 @@ pose_optimization_node:
   ros__parameters:
     use_sim_time: true
     odom_topic_agv: "/agv/odom" #or "/agv/odom" #"/arco/idmind_motors/odom"
-    radar_topic_agv: "/agv/filtered_pointcloud" #or /arco/radar/PointCloudDetection OR /agv/filtered_pointcloud
+    radar_topic_agv: "/agv/filtered_pointcloud" #radar cloud in the IMU frame (4D-Radar-Odom pre-processing)
     radar_egovel_topic_agv: "/agv/Ego_Vel_Twist"
     odom_topic_uav: "/uav/odom"
-    radar_topic_uav: "/uav/filtered_pointcloud" #/drone/radar/PointCloudDetection OR /uav/filtered_pointcloud
+    radar_topic_uav: "/uav/filtered_pointcloud" #radar cloud in the IMU frame (4D-Radar-Odom pre-processing)
     radar_egovel_topic_uav: "/uav/Ego_Vel_Twist"
     opt_timer_rate: 10.0 #Hz
     posegraph_backend: "ceres" #pose-graph solver: "ceres" or "gtsam" (same model; "gtsam" needs uwb_localization built with GTSAM >= 4.3)
@@ -65,13 +65,10 @@ pose_optimization_node:
     radar_yaw_stdev_deg: 1.0 #yaw std of radar factors (degrees); x/y/z std is radar_stdev (z variance inflated x10)
     agv_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #Local initial pose AGV [xyz rpy] [-2.805, -1.951, 0.0, 0.0, 0.0, -0.102]
     uav_init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] #Local initial pose UAV
+    fixed_anchor: "agv" #anchor fixed with a very strong prior (its *_anchor_prior) to remove the gauge freedom of the common frame: "agv" or "uav"
     agv_anchor_prior: [13.351, 27.385, 0.636, 0.001, 0.001, 3.079] #[13.351, 27.385, 0.636, 0.001, 0.001, 3.079] #prior for the AGV anchor node (initial pose wrt global map frame)
     uav_anchor_prior: [15.351, 23.385, 0.9, 0.0, 0.0, 0.028] #[15.351, 23.385, 0.9, 0.0, 0.0, 0.028] #prior for the UAV anchor node (initial pose wrt global map frame)
     imu_agv: 
         position: [0.0, 0.0, 0.165, 0.0, 0.0, 0.0] # x y z r p y 
     imu_uav: 
         position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # x y z r p y 
-    radar_uav:
-        position: [-0.385, -0.02, -0.225, 0.0, 0.725, 3.142]    #OR [-0.385, -0.02, -0.225, 0.0, 2.417, 3.14]
-    radar_agv:
-        position: [0.45, 0.05, 0.5, 0.0, 0.0, 0.0]   #OR [0.45, 0.05, 0.65, 0.0, 0.0, 0.0]

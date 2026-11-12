@@ -138,11 +138,11 @@ void CeresBackend::buildProblem(ceres::Problem& problem, PoseGraphInput& in) {
     problem.SetParameterBlockConstant(in.anchor_uav->state.data());
     problem.SetParameterBlockConstant(in.anchor_agv->state.data());
   } else {
-    // Anchor the AGV trajectory (fixes the gauge of the common frame).
-    problem.AddResidualBlock(PriorCostFunction::Create(in.prior_anchor_agv->pose,
-                                                       in.anchor_agv->roll, in.anchor_agv->pitch,
-                                                       in.prior_anchor_agv->covariance),
-                             nullptr, in.anchor_agv->state.data());
+    // Fix one anchor with a strong prior (removes the gauge freedom of the common frame).
+    State* fixed = in.fixedAnchor();
+    problem.AddResidualBlock(PriorCostFunction::Create(in.prior_anchor->pose, fixed->roll, fixed->pitch,
+                                                       in.prior_anchor->covariance),
+                             nullptr, fixed->state.data());
   }
 }
 

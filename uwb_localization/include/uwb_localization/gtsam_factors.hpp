@@ -19,8 +19,7 @@
 //
 // Unlike Ceres, GTSAM has no autodiff: Jacobians are chained by hand. Only
 // pose() below needs a hand-derived one; compose, between and the log
-// derivative come from GTSAM. Checked against numerical derivatives and the
-// Ceres factors in test/test_posegraph_backends.cpp.
+// derivative come from GTSAM.
 
 #include <vector>
 

@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <chrono>
 #include <fstream>
+#include <stdexcept>
 
 // ROS MSGS
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -189,9 +190,9 @@ void PoseOptimizationNode::declareParams() {
     // Basic topics and timing.
     this->declare_parameter<std::string>("odom_topic_agv", "/arco/idmind_motors/odom");
     this->declare_parameter<std::string>("odom_topic_uav", "/uav/odom");
-    this->declare_parameter<std::string>("radar_topic_agv", "/arco/radar/PointCloudDetection");
+    this->declare_parameter<std::string>("radar_topic_agv", "/agv/filtered_pointcloud");
     this->declare_parameter<std::string>("radar_egovel_topic_agv", "/agv/Ego_Vel_Twist");
-    this->declare_parameter<std::string>("radar_topic_uav", "/drone/radar/PointCloudDetection");
+    this->declare_parameter<std::string>("radar_topic_uav", "/uav/filtered_pointcloud");
     this->declare_parameter<std::string>("radar_egovel_topic_uav", "/uav/Ego_Vel_Twist");
 
     this->declare_parameter<double>("opt_timer_rate", 10.0); // Hz
@@ -229,6 +230,10 @@ void PoseOptimizationNode::declareParams() {
     this->declare_parameter<std::string>("posegraph_backend", "ceres");
     this->declare_parameter<std::string>("posegraph_compare_backend", "");
 
+    // Anchor fixed with a strong prior (its *_anchor_prior) to remove the gauge
+    // freedom of the common frame: "agv" or "uav".
+    this->declare_parameter<std::string>("fixed_anchor", "agv");
+
     // Anchor priors: [tx, ty, tz, roll, pitch, yaw]
     this->declare_parameter<std::vector<double>>("agv_anchor_prior",
         std::vector<double>{13.694, 25.197, 0.22, 0.001, 0.001, 3.04});
@@ -246,10 +251,6 @@ void PoseOptimizationNode::declareParams() {
         std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
     this->declare_parameter<std::vector<double>>("imu_agv.position",
         std::vector<double>{0.0, 0.0, 0.165, 0.0, 0.0, 0.0});
-    this->declare_parameter<std::vector<double>>("radar_uav.position",
-        std::vector<double>{-0.385, -0.02, -0.225, 0.0, 2.417, 3.14});
-    this->declare_parameter<std::vector<double>>("radar_agv.position",
-        std::vector<double>{0.45, 0.05, 0.65, 0.0, 0.0, 0.0});
 }
 
 void PoseOptimizationNode::getParams() {
@@ -293,6 +294,13 @@ void PoseOptimizationNode::getParams() {
     this->get_parameter("posegraph_backend", backend_name_);
     this->get_parameter("posegraph_compare_backend", compare_backend_name_);
 
+    std::string fixed_anchor;
+    this->get_parameter("fixed_anchor", fixed_anchor);
+    if (fixed_anchor != "agv" && fixed_anchor != "uav")
+        throw std::invalid_argument("fixed_anchor must be \"agv\" or \"uav\", got \"" + fixed_anchor + "\"");
+    fix_uav_anchor_ = (fixed_anchor == "uav");
+    RCLCPP_INFO(this->get_logger(), "  fixed_anchor: %s", fixed_anchor.c_str());
+
     std::vector<double> agv_anchor_prior, uav_anchor_prior, uav_init_pose, agv_init_pose;
     this->get_parameter("agv_anchor_prior", agv_anchor_prior);
     this->get_parameter("uav_anchor_prior", uav_anchor_prior);
@@ -310,21 +318,18 @@ void PoseOptimizationNode::getParams() {
     uav_init_pose_ = buildTransformationSE3(uav_init_pose[3], uav_init_pose[4],
         Eigen::Vector4d(uav_init_pose[0], uav_init_pose[1], uav_init_pose[2], uav_init_pose[5]));
 
-    // Sensor placement
-    std::vector<double> radar_uav_pos, radar_agv_pos, imu_uav_pos, imu_agv_pos;
+    // Sensor placement. The radar clouds come from 4D-Radar-Odom's
+    // radar_pcl_processor already in the IMU frame (it applies the radar
+    // extrinsics, radar_to_base_link in its config), so only the IMU pose is
+    // needed here to bring them into the body frame.
+    std::vector<double> imu_uav_pos, imu_agv_pos;
     this->get_parameter("imu_uav.position", imu_uav_pos);
     this->get_parameter("imu_agv.position", imu_agv_pos);
-    this->get_parameter("radar_uav.position", radar_uav_pos);
-    this->get_parameter("radar_agv.position", radar_agv_pos);
 
     T_uav_imu_ = buildTransformationSE3(imu_uav_pos[3], imu_uav_pos[4],
         Eigen::Vector4d(imu_uav_pos[0], imu_uav_pos[1], imu_uav_pos[2], imu_uav_pos[5]));
     T_agv_imu_ = buildTransformationSE3(imu_agv_pos[3], imu_agv_pos[4],
         Eigen::Vector4d(imu_agv_pos[0], imu_agv_pos[1], imu_agv_pos[2], imu_agv_pos[5]));
-    T_uav_radar_ = buildTransformationSE3(radar_uav_pos[3], radar_uav_pos[4],
-        Eigen::Vector4d(radar_uav_pos[0], radar_uav_pos[1], radar_uav_pos[2], radar_uav_pos[5]));
-    T_agv_radar_ = buildTransformationSE3(radar_agv_pos[3], radar_agv_pos[4],
-        Eigen::Vector4d(radar_agv_pos[0], radar_agv_pos[1], radar_agv_pos[2], radar_agv_pos[5]));
 
     // Logs
     RCLCPP_INFO(this->get_logger(), "PoseOptimizationNode parameters:");
@@ -357,10 +362,6 @@ void PoseOptimizationNode::getParams() {
     logTransformationMatrix(T_uav_imu_.matrix(), this->get_logger());
     RCLCPP_INFO(this->get_logger(), "T_agv_imu:\n");
     logTransformationMatrix(T_agv_imu_.matrix(), this->get_logger());
-    RCLCPP_INFO(this->get_logger(), "T_uav_radar:\n");
-    logTransformationMatrix(T_uav_radar_.matrix(), this->get_logger());
-    RCLCPP_INFO(this->get_logger(), "T_agv_radar:\n");
-    logTransformationMatrix(T_agv_radar_.matrix(), this->get_logger());
 }
 
 
@@ -713,7 +714,8 @@ PoseGraphInput PoseOptimizationNode::makeGraphInput(MapOfStates &agv_map, MapOfS
     in.min_keyframes = min_keyframes_;
     in.prior_agv = &prior_agv_;
     in.prior_uav = &prior_uav_;
-    in.prior_anchor_agv = &prior_anchor_agv_;
+    in.prior_anchor = fix_uav_anchor_ ? &prior_anchor_uav_ : &prior_anchor_agv_;
+    in.fix_uav_anchor = fix_uav_anchor_;
     in.odom_agv = &proprioceptive_constraints_agv_;
     in.odom_uav = &proprioceptive_constraints_uav_;
     in.radar_agv = &extraceptive_constraints_agv_;
@@ -843,7 +845,7 @@ void PoseOptimizationNode::writePoseGraphDump(const std::string &filename) const
     };
     prior("agv", prior_agv_);
     prior("uav", prior_uav_);
-    prior("anchor_agv", prior_anchor_agv_);
+    prior(fix_uav_anchor_ ? "anchor_uav" : "anchor_agv", fix_uav_anchor_ ? prior_anchor_uav_ : prior_anchor_agv_);
 
     auto factors = [&](const char *group, const VectorOfConstraints &v) {
         for (const auto &c : v) {
@@ -1116,7 +1118,7 @@ void PoseOptimizationNode::globalOptCb() {
             prior_agv_.pose = init_state_agv_.pose;
             prior_agv_.covariance = Eigen::Matrix4d::Identity() * 1e-6;
 
-            //Anchor AGV prior - we use this one
+            //Anchor priors: only the one of the fixed anchor (fixed_anchor) is used
             prior_anchor_agv_.pose = T_agv_anchor_prior_;
             prior_anchor_agv_.covariance = Eigen::Matrix4d::Identity() * 1e-6;
 
@@ -1124,7 +1126,6 @@ void PoseOptimizationNode::globalOptCb() {
             prior_uav_.pose = init_state_uav_.pose;
             prior_uav_.covariance = Eigen::Matrix4d::Identity() * 1e-6;
 
-            //Anchor UAV prior - not used currently
             prior_anchor_uav_.pose = T_uav_anchor_prior_;
             prior_anchor_uav_.covariance = Eigen::Matrix4d::Identity() * 1e-6;
 

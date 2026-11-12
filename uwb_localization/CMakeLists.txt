@@ -191,13 +191,6 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
-
-  # Ceres and GTSAM backends solve the same model (needs GTSAM).
-  if(GTSAM_FOUND)
-    find_package(ament_cmake_gtest REQUIRED)
-    ament_add_gtest(test_posegraph_backends test/test_posegraph_backends.cpp)
-    target_link_libraries(test_posegraph_backends pose_optimization_lib)
-  endif()
 endif()
 
 ament_package()

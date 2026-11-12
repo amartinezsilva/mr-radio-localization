@@ -52,7 +52,7 @@ public:
     addEncounters(in_.encounters_uwb);
     addEncounters(in_.encounters_radar);
 
-    if (anchors_free_) addPrior(anchorSlot(false), *in_.prior_anchor_agv);
+    if (anchors_free_) addPrior(anchorSlot(in_.fix_uav_anchor), *in_.prior_anchor);  // fixes the gauge
 
     // Initial values for every variable a factor references.
     for (auto& [key, var] : variables_) {

@@ -26,7 +26,9 @@ namespace uwb_localization {
 //
 // Sliding window: a node is free while posegraph::isNodeFixedKF(...) is false
 // for it, otherwise it is held constant. Anchors are free only when at least
-// one encounter constraint is used (otherwise nothing observes them).
+// one encounter constraint is used (otherwise nothing observes them); one of
+// them (fix_uav_anchor) then gets a very strong prior, which removes the gauge
+// freedom of the common frame.
 struct PoseGraphInput {
   posegraph::MapOfStates* agv_map = nullptr;
   posegraph::MapOfStates* uav_map = nullptr;
@@ -36,10 +38,14 @@ struct PoseGraphInput {
   int max_keyframes = 0, min_keyframes = 0;
 
   // Priors: on each robot's first node (only while it is still free) and on
-  // the AGV anchor (only when the anchors are free).
+  // the fixed anchor (only when the anchors are free): the AGV anchor, or the
+  // UAV anchor if fix_uav_anchor.
   const posegraph::PriorConstraint* prior_agv = nullptr;
   const posegraph::PriorConstraint* prior_uav = nullptr;
-  const posegraph::PriorConstraint* prior_anchor_agv = nullptr;
+  const posegraph::PriorConstraint* prior_anchor = nullptr;
+  bool fix_uav_anchor = false;
+
+  State* fixedAnchor() const { return fix_uav_anchor ? anchor_uav : anchor_agv; }
 
   // Intra-robot constraints: id_begin/id_end are nodes of the same robot.
   const posegraph::VectorOfConstraints* odom_agv = nullptr;

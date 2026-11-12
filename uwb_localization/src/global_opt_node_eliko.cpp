@@ -217,7 +217,7 @@ private:
         this->declare_parameter<std::string>("distances_topic", "/eliko/Distances");
         this->declare_parameter<std::string>("odom_topic_agv", "/arco/idmind_motors/odom");
         this->declare_parameter<std::string>("odom_topic_uav", "/uav/odom");
-        this->declare_parameter<double>("opt_timer_rate_", 10.0);  // in Hz
+        this->declare_parameter<double>("opt_timer_rate", 10.0);  // in Hz
 
         // Optimization settings
         this->declare_parameter<int>("min_measurements", 50);
@@ -262,7 +262,7 @@ private:
         this->get_parameter("distances_topic", distances_topic_);
         this->get_parameter("odom_topic_agv", odom_topic_agv_);
         this->get_parameter("odom_topic_uav", odom_topic_uav_);
-        this->get_parameter("opt_timer_rate_", opt_timer_rate_);
+        this->get_parameter("opt_timer_rate", opt_timer_rate_);
         this->get_parameter("min_measurements", min_measurements_);
         this->get_parameter("min_traveled_distance", min_traveled_distance_);
         // Convert angle from degrees to radians.

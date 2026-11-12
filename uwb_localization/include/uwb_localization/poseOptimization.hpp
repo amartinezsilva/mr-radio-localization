@@ -74,7 +74,8 @@ public:
   /// calibration). One record per line:
   ///   node <a|u> <id> <planar> <roll> <pitch> <x> <y> <z> <yaw>
   ///   anchor <a|u> <planar> <roll> <pitch> <x> <y> <z> <yaw>
-  ///   prior <agv|uav|anchor_agv> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  ///   prior <agv|uav|anchor_agv|anchor_uav> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  ///   (one anchor prior: the one of the fixed anchor)
   ///   factor <group> <id_begin> <id_end> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
   /// with group odom_agv, odom_uav, radar_agv, radar_uav, uwb or radar_encounter.
   void writePoseGraphDump(const std::string& filename) const;
@@ -191,7 +192,6 @@ private:
 
   //---------------- Parameters ----------------//
   double opt_timer_rate_{10.0};
-  Sophus::SE3d T_uav_radar_, T_agv_radar_;
   Sophus::SE3d T_uav_imu_, T_agv_imu_;
   Sophus::SE3d T_agv_anchor_prior_, T_uav_anchor_prior_;
   double pointcloud_radar_sigma_{0.1};
@@ -265,6 +265,7 @@ private:
 
   // Pose-graph backends
   std::string backend_name_{"ceres"}, compare_backend_name_;
+  bool fix_uav_anchor_{false};  // fixed_anchor == "uav"
   std::unique_ptr<PoseGraphBackend> backend_, compare_backend_;
 
   struct BackendStepRecord {
