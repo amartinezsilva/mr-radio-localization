@@ -37,15 +37,14 @@ RUN install_localization_deps.sh rosdep /home/jazzy/ros2_ws
 
 RUN chown -R jazzy:jazzy /home/jazzy/ros2_ws/src
 
-# Record which source the binaries below are built from (commit + hash of
-# any uncommitted diff -- same format as localization_source_state in
-# localization-lib.sh). At runtime the host checkout is mounted over this
-# copy (docker-compose.yml), and the menu compares the two to tell you when
-# a rebuild is needed. safe.directory: the copy may already belong to jazzy
-# while this runs as root, and git refuses repositories owned by another user.
-RUN cd /home/jazzy/ros2_ws/src/mr-radio-localization && \
-    echo "$(git -c safe.directory='*' rev-parse HEAD) $(git -c safe.directory='*' diff HEAD | sha1sum | cut -d' ' -f1)" \
-      > /home/jazzy/.uwb_localization_build_state
+# Record which source the binaries below are built from (a hash of the
+# compiled files, localization_source_state in localization-lib.sh). At
+# runtime the host checkout is mounted over this copy (docker-compose.yml),
+# and the menu compares the two to tell you when a rebuild is needed.
+RUN source /home/jazzy/ros2_ws/src/mr-radio-localization/docker/localization-lib.sh && \
+    LOCALIZATION_SRC=/home/jazzy/ros2_ws/src/mr-radio-localization localization_source_state \
+      > /home/jazzy/.uwb_localization_build_state && \
+    test -s /home/jazzy/.uwb_localization_build_state
 
 # Builds incrementally: UWBPX4Sim's packages are already built (from the
 # base image's own colcon build layer) and won't be redone -- only

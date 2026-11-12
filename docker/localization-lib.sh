@@ -14,19 +14,22 @@ BAGS_DIR="$LOCALIZATION_SRC/uwb_localization/bags"
 # by the Dockerfile for the image's build, and by rebuild_localization.
 BUILD_STATE_FILE="$HOME/.uwb_localization_build_state"
 
-# localization_source_state: "<commit> <sha1 of the uncommitted diff>" of
-# the mounted checkout (untracked files are ignored). The checkout belongs to
-# the host user, not to this container's user, hence safe.directory.
+# localization_source_state: a hash of the files that are compiled -- the
+# contents of uwb_localization's CMakeLists.txt, package.xml, src/,
+# include/ and msg/ (new, untracked files included). Commits, docs,
+# parameters and launch files don't count: the installed config/ and
+# launch/ are links into the checkout, so edits there are live without a
+# rebuild. Also called by the Dockerfiles for the image's own build.
 localization_source_state() {
-  local head diff
-  head=$(git -c safe.directory='*' -C "$LOCALIZATION_SRC" rev-parse HEAD 2>/dev/null) || return 1
-  diff=$(git -c safe.directory='*' -C "$LOCALIZATION_SRC" diff HEAD 2>/dev/null | sha1sum | cut -d' ' -f1)
-  echo "$head $diff"
+  local pkg="$LOCALIZATION_SRC/uwb_localization"
+  [[ -f "$pkg/CMakeLists.txt" ]] || return 1
+  ( cd "$pkg" && find CMakeLists.txt package.xml src include msg -type f -print0 2>/dev/null \
+      | sort -z | xargs -0 sha1sum | sha1sum | cut -d' ' -f1 )
 }
 
-# localization_needs_rebuild: true when the mounted checkout differs from the
-# source the binaries were built from (a different commit, or uncommitted
-# changes). False when it can't tell (no git checkout, no recorded state).
+# localization_needs_rebuild: true when the compiled files of the mounted
+# checkout differ from the ones the binaries were built from. False when it
+# can't tell (no checkout, no recorded state).
 localization_needs_rebuild() {
   local current built
   current=$(localization_source_state) || return 1
