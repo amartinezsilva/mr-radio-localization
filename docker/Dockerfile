@@ -24,7 +24,9 @@ RUN useradd -ms /bin/bash jazzy && \
 ENV HOME="/home/jazzy"
 ARG ROS_WS=/home/jazzy/ros2_ws
 
-COPY install_localization_deps.sh /usr/local/bin/install_localization_deps.sh
+# Build context: the repository root (see docker-compose.yml and the
+# .dockerignore there, which keeps bags/ out of it).
+COPY docker/install_localization_deps.sh /usr/local/bin/install_localization_deps.sh
 RUN chmod +x /usr/local/bin/install_localization_deps.sh && \
     install_localization_deps.sh system ${ROS_WS}
 
@@ -32,27 +34,25 @@ RUN chmod +x /usr/local/bin/install_localization_deps.sh && \
 # image it comes with the UWBPX4Sim base image instead.
 RUN git clone https://github.com/robotics-upo/eliko_ros.git ${ROS_WS}/src/eliko_ros
 
-# Docker only invalidates a `RUN git clone` layer when this instruction's own
-# text changes, not when the remote it clones actually moves -- setup.sh
-# passes a fresh CACHEBUST every build so this clone (and what follows) is
-# redone without invalidating the slower layers above.
-ARG CACHEBUST=1
-# This clone is what the image builds, so it's usable straight away; at
-# runtime docker-compose.yml mounts your host checkout over it.
-RUN git clone https://github.com/amartinezsilva/mr-radio-localization ${ROS_WS}/src/mr-radio-localization
+# This repository: your local checkout (the build context), exactly as it
+# is -- branch, uncommitted changes and all -- so the image is built from
+# the same source docker-compose.yml then mounts over it at runtime.
+COPY . ${ROS_WS}/src/mr-radio-localization
 
 RUN install_localization_deps.sh rosdep ${ROS_WS}
 
-# BUILD_TESTING=OFF: the tests aren't run in the image, and ars548_driver's
-# own unit tests don't compile against its current jazzy branch.
 # Record which source the binaries below are built from (commit + hash of
 # any uncommitted diff -- same format as localization_source_state in
-# localization-lib.sh): at runtime the host checkout is mounted over this
-# clone (docker-compose.yml), and the menu compares the two to tell you
-# when a rebuild is needed.
+# localization-lib.sh). At runtime the host checkout is mounted over this
+# copy (docker-compose.yml), and the menu compares the two to tell you when
+# a rebuild is needed. safe.directory: the copy may already belong to jazzy
+# while this runs as root, and git refuses repositories owned by another user.
 RUN cd ${ROS_WS}/src/mr-radio-localization && \
-    echo "$(git rev-parse HEAD) $(git diff HEAD | sha1sum | cut -d' ' -f1)" > /home/jazzy/.uwb_localization_build_state
+    echo "$(git -c safe.directory='*' rev-parse HEAD) $(git -c safe.directory='*' diff HEAD | sha1sum | cut -d' ' -f1)" \
+      > /home/jazzy/.uwb_localization_build_state
 
+# BUILD_TESTING=OFF: the tests aren't run in the image, and ars548_driver's
+# own unit tests don't compile against its current jazzy branch.
 RUN cd ${ROS_WS} && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install --cmake-args -DBUILD_TESTING=OFF && \
     chown -R jazzy:jazzy /home/jazzy
 
@@ -61,8 +61,8 @@ RUN cd ${ROS_WS} && source /opt/ros/jazzy/setup.bash && colcon build --symlink-i
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /home/jazzy/.bashrc && \
     echo "source ${ROS_WS}/install/setup.bash" >> /home/jazzy/.bashrc
 
-COPY localization-lib.sh /localization-lib.sh
-COPY entrypoint-standalone.sh /entrypoint.sh
+COPY docker/localization-lib.sh /localization-lib.sh
+COPY docker/entrypoint-standalone.sh /entrypoint.sh
 RUN chmod +x /localization-lib.sh /entrypoint.sh
 
 USER jazzy

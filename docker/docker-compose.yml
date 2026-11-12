@@ -56,8 +56,10 @@ services:
   standalone:
     <<: *common
     build:
-      context: .
-      dockerfile: Dockerfile
+      # The repository root: the images COPY this checkout (see the
+      # .dockerignore there).
+      context: ..
+      dockerfile: docker/Dockerfile
     image: mr-radio-localization:jazzy-standalone
     # No NVIDIA-specific settings here, unlike `sim`: RViz renders fine in
     # software, and this image shouldn't require nvidia-container-toolkit.
@@ -79,8 +81,8 @@ services:
   sim:
     <<: *common
     build:
-      context: .
-      dockerfile: Dockerfile.sim
+      context: ..
+      dockerfile: docker/Dockerfile.sim
     image: mr-radio-localization:jazzy-sim
     environment:
       - DISPLAY=${DISPLAY}

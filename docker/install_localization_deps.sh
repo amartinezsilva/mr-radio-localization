@@ -7,8 +7,8 @@
 #
 # Runs as root at image build time, in two phases, because rosdep can only
 # resolve keys once this repo's own sources are in the workspace -- and
-# that clone sits behind the CACHEBUST layer, after the (slower, rarely
-# changing) system dependencies:
+# that copy of the checkout comes after the (slower, rarely changing)
+# system dependencies, so editing the repo doesn't rebuild them:
 #
 #   install_localization_deps.sh system <ros_ws>   # apt + small_gicp + GTSAM + radar packages
 #   install_localization_deps.sh rosdep <ros_ws>   # everything under <ros_ws>/src

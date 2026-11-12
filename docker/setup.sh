@@ -520,22 +520,13 @@ log_step "Building the image"
 # --progress is a global `docker compose` flag, not a `build` one -- it has
 # to come before the subcommand.
 #
-# --build-arg CACHEBUST: a `RUN git clone` layer only invalidates when this
-# instruction's own text changes, not when the remote it clones actually
-# moves -- so without this, a normal (non---no-cache) rebuild would silently
-# keep serving a stale checkout of mr-radio-localization even after new
-# commits land. Passing a fresh value every time busts just that layer (and
-# everything after it) without paying for a full --no-cache rebuild of the
-# more expensive earlier layers in *this* Dockerfile (apt installs,
-# small_gicp, ars548_ros, 4D-Radar-Odom) -- and, since this image is FROM
-# uwbpx4sim:jazzy, without ever touching that base image's own layers
-# (PX4-Autopilot, Gazebo, etc.) at all. --no-cache still forces everything
-# in this Dockerfile, for when those earlier layers themselves need a
-# clean rebuild (it does not rebuild the base image -- see --no-cache's
-# separate handling for that above, at the base-image step).
-build_arg=(--build-arg "CACHEBUST=$(date +%s)")
-compose_args=(--progress=plain build "${build_arg[@]}" "$SERVICE")
-(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "${build_arg[@]}" "$SERVICE")
+# No cache-busting build arg is needed for this repository: the images COPY
+# the local checkout, so Docker's layer cache already rebuilds from that
+# layer on whenever any of its files change. --no-cache forces everything in
+# this Dockerfile (not the base image -- see --no-cache's separate handling
+# for that above, at the base-image step).
+compose_args=(--progress=plain build "$SERVICE")
+(( NO_CACHE )) && compose_args=(--progress=plain build --no-cache "$SERVICE")
 
 if (( DRY_RUN )); then
   log_info "[DRY-RUN] (cd \"$SCRIPT_DIR\" && docker compose ${compose_args[*]})"
