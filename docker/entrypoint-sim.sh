@@ -40,7 +40,9 @@ stack, pre-built and ready to go.
 ${C_DIM}Tip: your whole UWBPX4Sim checkout (UWBPX4SIM_DIR on the host) is
 bind-mounted -- edit a layout, a plugin-parameter preset, or drop in a
 custom .sdf world there, then re-run setup (option 1) to apply it.
-uwb_localization/config and uwb_localization/bags are bind-mounted too.
+Your mr-radio-localization checkout is bind-mounted too: bags, parameters
+and launch files edited on the host are used the next time you launch;
+after changing its C++ code, use "Rebuild uwb_localization" (no new image).
 
 Tip: for Gazebo/RViz windows to appear, run on the HOST
 first: xhost +local:docker (see docker-compose.yml's comments for the
@@ -63,6 +65,10 @@ print_menu() {
   # Same check as UWBPX4Sim's own print_menu: .setup_env lives in the
   # host-mounted checkout and outlives the container, while the built
   # plugin lives in this container's PX4 tree -- both must exist.
+  local rebuild_note=""
+  if localization_needs_rebuild; then
+    rebuild_note=" ${C_YELLOW}(your checkout changed since the last build)${C_RESET}"
+  fi
   local setup_tick=""
   local plugin_lib="$PX4_DIR/build/px4_sitl_default/src/modules/simulation/gz_plugins/libUWBGazeboPlugin.so"
   if [[ -f "$UWBPX4SIM_DIR/.setup_env" && -f "$plugin_lib" ]]; then
@@ -79,13 +85,16 @@ ${C_CYAN}==================================================${C_RESET}
      Launch PX4 SITL + Gazebo + the UWB bridge/offboard nodes.
   ${C_GREEN}3)${C_RESET} Launch localization
      Run the relative-localization estimator against the running simulation.
-  ${C_GREEN}4)${C_RESET} Open a shell
-  ${C_YELLOW}5)${C_RESET} Exit
+  ${C_GREEN}4)${C_RESET} Rebuild uwb_localization${rebuild_note}
+     Compile your mounted mr-radio-localization checkout (after C++ changes).
+  ${C_GREEN}5)${C_RESET} Open a shell
+  ${C_YELLOW}6)${C_RESET} Exit
 ${C_CYAN}==================================================${C_RESET}
 EOF
 }
 
 run_localization() {
+  offer_rebuild_if_needed
   choose_localization_launch
   local launch_file="$LAUNCH_FILE"
   local -a launch_args=("${LAUNCH_ARGS[@]}")
@@ -131,13 +140,14 @@ run_menu() {
   print_welcome
   while true; do
     print_menu
-    read -r -p "Select an option [1-5]: " choice || { echo; exec bash; }
+    read -r -p "Select an option [1-6]: " choice || { echo; exec bash; }
     case "$choice" in
       1) run_setup || true ;;
       2) run_demo || true ;;
       3) run_localization || true ;;
-      4) bash || true; log_info "Shell closed. Back to the menu." ;;
-      5) do_exit ;;
+      4) rebuild_localization || true ;;
+      5) bash || true; log_info "Shell closed. Back to the menu." ;;
+      6) do_exit ;;
       *) echo "Invalid selection: '$choice'" ;;
     esac
   done

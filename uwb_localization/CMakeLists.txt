@@ -168,7 +168,37 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
-install(DIRECTORY bags DESTINATION share/${PROJECT_NAME})
+# bags/ is installed as one symbolic link to the source folder, not bag by
+# bag: bags are large (a copy would duplicate them in install/) and are
+# dropped in at any time (with a link they're visible without rebuilding).
+# An older install put the bags there one by one; that folder is replaced
+# only if it holds nothing but links, so real bag files are never deleted
+# (e.g. a host folder bind-mounted there by an older Docker setup).
+install(CODE "
+  set(bags_link \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/bags\")
+  if(IS_DIRECTORY \"\${bags_link}\" AND NOT IS_SYMLINK \"\${bags_link}\")
+    file(GLOB_RECURSE bags_entries LIST_DIRECTORIES false \"\${bags_link}/*\")
+    set(bags_only_links TRUE)
+    foreach(entry \${bags_entries})
+      if(NOT IS_SYMLINK \"\${entry}\")
+        set(bags_only_links FALSE)
+      endif()
+    endforeach()
+    if(bags_only_links)
+      file(REMOVE_RECURSE \"\${bags_link}\")
+    else()
+      message(WARNING \"\${bags_link} holds real files, so it was left as it is instead of being linked to ${CMAKE_CURRENT_SOURCE_DIR}/bags. Move them out of there to get the link.\")
+    endif()
+  endif()
+  if(IS_SYMLINK \"\${bags_link}\")
+    file(REMOVE \"\${bags_link}\")  # removes the link itself, never its target
+  endif()
+  if(NOT EXISTS \"\${bags_link}\")
+    file(MAKE_DIRECTORY \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}\")
+    file(CREATE_LINK \"${CMAKE_CURRENT_SOURCE_DIR}/bags\" \"\${bags_link}\" SYMBOLIC)
+    message(STATUS \"Linked: \${bags_link} -> ${CMAKE_CURRENT_SOURCE_DIR}/bags\")
+  endif()
+")
 
 
 if(BUILD_TESTING)

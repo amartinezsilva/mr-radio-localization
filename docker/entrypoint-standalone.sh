@@ -51,9 +51,10 @@ The ROS 2 UWB relative-localization stack, pre-built and ready to run
 against your own rosbags. No simulator in this image -- for the PX4/Gazebo
 SITL simulation, use the SITL image instead (docker/setup.sh --sim).
 
-${C_DIM}Tip: uwb_localization/bags and uwb_localization/config are bind-mounted
-from the host -- drop your bags into bags/ and tune params_sim.yaml /
-params_dataset.yaml in config/, no rebuild needed.
+${C_DIM}Tip: your mr-radio-localization checkout is bind-mounted from the host --
+drop bags into uwb_localization/bags/, or edit params_*.yaml / launch files,
+and they're used the next time you launch. After changing C++ code, use
+"Rebuild uwb_localization" below (no new image needed).
 
 Tip: for RViz to appear, run on the HOST first: xhost +local:docker
 (setup.sh does this for you).
@@ -66,6 +67,11 @@ EOF
 }
 
 print_menu() {
+  # Checked fresh on every call, so it reflects edits made meanwhile.
+  local rebuild_note=""
+  if localization_needs_rebuild; then
+    rebuild_note=" ${C_YELLOW}(your checkout changed since the last build)${C_RESET}"
+  fi
   cat <<EOF
 
 ${C_CYAN}==================================================${C_RESET}
@@ -73,13 +79,16 @@ ${C_CYAN}==================================================${C_RESET}
 ${C_CYAN}==================================================${C_RESET}
   ${C_GREEN}1)${C_RESET} Launch localization
      Run the relative-localization estimator on a bag from uwb_localization/bags/.
-  ${C_GREEN}2)${C_RESET} Open a shell
-  ${C_YELLOW}3)${C_RESET} Exit
+  ${C_GREEN}2)${C_RESET} Rebuild uwb_localization${rebuild_note}
+     Compile your mounted checkout (needed after changing C++ code).
+  ${C_GREEN}3)${C_RESET} Open a shell
+  ${C_YELLOW}4)${C_RESET} Exit
 ${C_CYAN}==================================================${C_RESET}
 EOF
 }
 
 run_localization() {
+  offer_rebuild_if_needed
   choose_localization_launch
   echo
   log_info "Launching $LAUNCH_FILE ${LAUNCH_ARGS[*]} -- press Ctrl-C to stop it and return to the menu."
@@ -122,11 +131,12 @@ run_menu() {
   print_welcome
   while true; do
     print_menu
-    read -r -p "Select an option [1-3]: " choice || { echo; exec bash; }
+    read -r -p "Select an option [1-4]: " choice || { echo; exec bash; }
     case "$choice" in
       1) run_localization || true ;;
-      2) bash || true; log_info "Shell closed. Back to the menu." ;;
-      3) do_exit ;;
+      2) rebuild_localization || true ;;
+      3) bash || true; log_info "Shell closed. Back to the menu." ;;
+      4) do_exit ;;
       *) echo "Invalid selection: '$choice'" ;;
     esac
   done

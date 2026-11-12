@@ -1,11 +1,82 @@
 #!/bin/bash
 #
-# localization-lib.sh - Launch-file and bag picker shared by both images'
-# menus (entrypoint-standalone.sh and entrypoint-sim.sh). Defines functions
-# only; nothing runs at the top level. Expects log_warn and the C_* color
-# variables to be defined by whoever sources it.
+# localization-lib.sh - Launch-file and bag picker, and the rebuild of
+# uwb_localization from the mounted checkout, shared by both images' menus
+# (entrypoint-standalone.sh and entrypoint-sim.sh). Defines functions only;
+# nothing runs at the top level. Expects log_info/log_warn/log_ok and the
+# C_* color variables to be defined by whoever sources it.
 
-BAGS_DIR="$HOME/ros2_ws/install/uwb_localization/share/uwb_localization/bags"
+# The host checkout, mounted over the image's own clone (docker-compose.yml).
+LOCALIZATION_SRC="$HOME/ros2_ws/src/mr-radio-localization"
+# The installed bags/ is a link to this folder, so listing it here is the same.
+BAGS_DIR="$LOCALIZATION_SRC/uwb_localization/bags"
+# Source state the current uwb_localization binaries were built from: written
+# by the Dockerfile for the image's build, and by rebuild_localization.
+BUILD_STATE_FILE="$HOME/.uwb_localization_build_state"
+
+# localization_source_state: "<commit> <sha1 of the uncommitted diff>" of
+# the mounted checkout (untracked files are ignored). The checkout belongs to
+# the host user, not to this container's user, hence safe.directory.
+localization_source_state() {
+  local head diff
+  head=$(git -c safe.directory='*' -C "$LOCALIZATION_SRC" rev-parse HEAD 2>/dev/null) || return 1
+  diff=$(git -c safe.directory='*' -C "$LOCALIZATION_SRC" diff HEAD 2>/dev/null | sha1sum | cut -d' ' -f1)
+  echo "$head $diff"
+}
+
+# localization_needs_rebuild: true when the mounted checkout differs from the
+# source the binaries were built from (a different commit, or uncommitted
+# changes). False when it can't tell (no git checkout, no recorded state).
+localization_needs_rebuild() {
+  local current built
+  current=$(localization_source_state) || return 1
+  built=$(cat "$BUILD_STATE_FILE" 2>/dev/null) || return 1
+  [[ "$current" != "$built" ]]
+}
+
+_colcon_build_localization() {
+  ( source /opt/ros/jazzy/setup.bash && cd "$HOME/ros2_ws" && \
+    colcon build --symlink-install --packages-select uwb_localization --cmake-args -DBUILD_TESTING=OFF )
+}
+
+# rebuild_localization: rebuilds uwb_localization from the mounted checkout
+# (incremental) and records the source state it was built from. If the
+# incremental build fails, offers a clean one: an incremental build can't
+# recover from some changes, e.g. a removed .msg/.srv file leaves stale
+# generated code behind in build/.
+rebuild_localization() {
+  local state
+  state=$(localization_source_state) || state=""
+  log_info "Rebuilding uwb_localization from your checkout (incremental; the first time takes a couple of minutes)..."
+  if ! _colcon_build_localization; then
+    echo
+    log_warn "The incremental build failed (errors above)."
+    if ! confirm_yes "Retry with a clean build of uwb_localization (deletes its build/ folder only)?"; then
+      log_warn "The previous binaries are still in place."
+      return 1
+    fi
+    # Only build/: install/uwb_localization holds the bags/ bind mount from
+    # the host, so it must never be deleted recursively.
+    rm -rf "$HOME/ros2_ws/build/uwb_localization"
+    if ! _colcon_build_localization; then
+      log_warn "The clean build failed too -- see the errors above."
+      return 1
+    fi
+  fi
+  [[ -n "$state" ]] && echo "$state" > "$BUILD_STATE_FILE"
+  log_ok "uwb_localization rebuilt."
+}
+
+# offer_rebuild_if_needed: before launching, asks whether to rebuild first
+# when the binaries are older than the mounted source.
+offer_rebuild_if_needed() {
+  localization_needs_rebuild || return 0
+  echo
+  log_warn "Your mr-radio-localization checkout differs from the source uwb_localization was last built from."
+  if confirm_yes "Rebuild it first?"; then
+    rebuild_localization || true
+  fi
+}
 
 # choose_localization_launch: asks which launch file and which bag to use.
 # Sets LAUNCH_FILE and LAUNCH_ARGS (an array of `name:=value` arguments).
@@ -20,7 +91,7 @@ choose_localization_launch() {
   [[ "$launch_choice" == "2" ]] && LAUNCH_FILE="localization_dataset.launch.py"
 
   # Both launch files take a `bag_name` launch argument (relative to
-  # uwb_localization/bags/, bind-mounted from the host -- see
+  # uwb_localization/bags/, in the checkout mounted from the host -- see
   # docker-compose.yml) instead of a hardcoded path, so offer whatever bags
   # are actually sitting there. Recognizes directory-style bags (a
   # metadata.yaml one level down) and standalone .mcap bags.

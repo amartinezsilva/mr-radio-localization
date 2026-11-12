@@ -181,8 +181,10 @@ resolve_uwbpx4sim_dir() {
 }
 
 fix_bind_mount_perms() {
-  # Only the SITL image bind-mounts the UWBPX4Sim checkout; the standalone
-  # one mounts just uwb_localization/bags and config, which it only reads.
+  # Only the SITL image bind-mounts the UWBPX4Sim checkout, which setup
+  # writes into. Both images also mount this repository, but only read it:
+  # rebuilding uwb_localization writes to ~/ros2_ws/build and install, which
+  # live in the container, not in the mounted source tree.
   is_sim || return 0
   log_step "Granting the container write access to the bind-mounted UWBPX4Sim checkout"
   # The image's non-root user (jazzy) is baked in at a fixed uid/gid

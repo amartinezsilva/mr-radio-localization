@@ -65,13 +65,15 @@ services:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
     volumes:
-      # uwb_localization's launch files resolve bags/ and config/ via
-      # get_package_share_directory, i.e. from install/, not from the source
-      # tree -- so these are mounted onto the installed paths. Drop rosbags
-      # into uwb_localization/bags/ or tune params_*.yaml in
-      # uwb_localization/config/ on the host; no rebuild needed.
-      - ../uwb_localization/bags:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/bags
-      - ../uwb_localization/config:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/config
+      # This whole repository from the host, mounted over the copy the image
+      # cloned and built at ~/ros2_ws/src/mr-radio-localization -- same as
+      # UWBPX4Sim's own compose file. The image builds with --symlink-install,
+      # so the installed config/ and launch/ files are links into this source
+      # tree, and the installed bags/ is a link to the source bags/ folder:
+      # edits on the host (parameters, launch files) and newly dropped-in
+      # bags are live without any rebuild. C++ changes need a rebuild inside
+      # the container (menu option "Rebuild uwb_localization"), not a new image.
+      - ..:/home/jazzy/ros2_ws/src/mr-radio-localization
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
   sim:
@@ -107,9 +109,8 @@ services:
       - ${UWBPX4SIM_DIR:-../../UWBPX4Sim}:/home/jazzy/ros2_ws/src/UWBPX4Sim
       # Mounted onto the installed path, not the source tree
       - ${UWBPX4SIM_DIR:-../../UWBPX4Sim}/ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
-      # Same as the standalone service: bags and configs onto their installed paths.
-      - ../uwb_localization/bags:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/bags
-      - ../uwb_localization/config:/home/jazzy/ros2_ws/install/uwb_localization/share/uwb_localization/config
+      # Same as the standalone service: this repository over the image's copy.
+      - ..:/home/jazzy/ros2_ws/src/mr-radio-localization
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     # NVIDIA GPU passthrough for Gazebo rendering (needs the host's NVIDIA
     # driver + nvidia-container-toolkit installed)
