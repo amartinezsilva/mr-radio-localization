@@ -224,6 +224,10 @@ private:
         this->declare_parameter<double>("min_traveled_distance", 0.5);   // in meters
         this->declare_parameter<double>("min_traveled_angle", 0.524);      // in radians (0.524 rad ~ 30 deg)
         this->declare_parameter<double>("max_traveled_distance", 10.0);    // in meters
+        // Which robots must move for a new estimate: "both" (default: the relative
+        // yaw is only observable from ranges when both robots move) or "either"
+        // (also estimates while one robot is static, to study that degenerate case).
+        this->declare_parameter<std::string>("motion_gate", "both");
         this->declare_parameter<double>("measurement_stdev", 0.1);         // in meters
         this->declare_parameter<bool>("use_ransac", true);
 
@@ -268,6 +272,11 @@ private:
         // Convert angle from degrees to radians.
         this->get_parameter("min_traveled_angle", min_traveled_angle_);
         this->get_parameter("max_traveled_distance", max_traveled_distance_);
+        const std::string motion_gate = this->get_parameter("motion_gate").as_string();
+        if (motion_gate != "both" && motion_gate != "either") {
+            throw std::invalid_argument("motion_gate must be \"both\" or \"either\", got \"" + motion_gate + "\"");
+        }
+        gate_either_ = motion_gate == "either";
         this->get_parameter("measurement_stdev", measurement_stdev_);
         this->get_parameter("use_ransac", use_ransac_);
 
@@ -303,6 +312,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "  min_traveled_distance: %f m", min_traveled_distance_);
         RCLCPP_INFO(this->get_logger(), "  min_traveled_angle: %f rad", min_traveled_angle_);
         RCLCPP_INFO(this->get_logger(), "  max_traveled_distance: %f m", max_traveled_distance_);
+        RCLCPP_INFO(this->get_logger(), "  motion_gate: %s", gate_either_ ? "either" : "both");
         RCLCPP_INFO(this->get_logger(), "  measurement_stdev: %f m", measurement_stdev_);
         RCLCPP_INFO(this->get_logger(), "  odom_error_position: %f", odom_error_distance_);
         RCLCPP_INFO(this->get_logger(), "  odom_error_angle: %f", odom_error_angle_);
@@ -625,7 +635,9 @@ private:
         /*Check the robots have moved enough between optimizations*/
         bool uav_enough_movement = uav_delta_translation_ >= min_traveled_distance_ || uav_delta_rotation_ >= min_traveled_angle_;
         bool agv_enough_movement = agv_delta_translation_ >= min_traveled_distance_ || agv_delta_rotation_ >= min_traveled_angle_;
-        if (!uav_enough_movement || !agv_enough_movement) {
+        const bool enough_movement = gate_either_ ? (uav_enough_movement || agv_enough_movement)
+                                                  : (uav_enough_movement && agv_enough_movement);
+        if (!enough_movement) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "[Eliko global_opt node] Insufficient movement UAV = [%.2fm %.2fº], AGV= [%.2fm %.2fº]. Skipping optimization.", uav_delta_translation_, uav_delta_rotation_ * 180.0/M_PI, agv_delta_translation_, agv_delta_rotation_ * 180.0/M_PI);
             return;
         }
@@ -650,7 +662,10 @@ private:
             double uav_disp = latest.uav_cumulative_distance - oldest.uav_cumulative_distance;
             double agv_disp = latest.agv_cumulative_distance - oldest.agv_cumulative_distance;
 
-            if(uav_disp < 2.0 || agv_disp < 2.0){
+            // Each robot must have moved 2 m over the window ("either": at least one of them).
+            const bool enough_disp = gate_either_ ? (uav_disp >= 2.0 || agv_disp >= 2.0)
+                                                  : (uav_disp >= 2.0 && agv_disp >= 2.0);
+            if (!enough_disp) {
                 RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Insufficient displacement in window. UAV displacement = [%.2f], AGV displacement = [%.2f]",
                 uav_disp, agv_disp);
                 return;
@@ -1103,6 +1118,7 @@ private:
     double opt_timer_rate_;
     size_t min_measurements_;
     double min_traveled_distance_, min_traveled_angle_, max_traveled_distance_;
+    bool gate_either_ = false;  // motion_gate: "either" instead of "both"
     double measurement_stdev_;
     size_t moving_average_max_samples_;
     bool moving_average_;

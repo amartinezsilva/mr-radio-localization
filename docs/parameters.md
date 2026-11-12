@@ -11,8 +11,9 @@ Estimates the relative transform between the two robots' odometry frames (the AG
 | `distances_topic` | `/eliko/Distances` | UWB range measurements (`eliko_messages/DistancesList`). |
 | `odom_topic_agv`, `odom_topic_uav` | `/agv/odom`, `/uav/odom` | Odometry of each robot, used to express the anchor and tag positions in each robot's odometry frame at every measurement. |
 | `opt_timer_rate` | 10.0 Hz | Rate of the estimation loop. |
-| `min_traveled_distance`, `min_traveled_angle` | 0.5 m, 0.262 rad | A new estimate is computed only once **both** robots have moved at least this much (distance or rotation) since the previous one. |
+| `min_traveled_distance`, `min_traveled_angle` | 0.5 m, 0.262 rad | A new estimate is computed only once both robots (see `motion_gate`) have moved at least this much (distance or rotation) since the previous one. |
 | `max_traveled_distance` | 10.0 m | Length of the measurement window: the oldest measurements are dropped while either robot has travelled more than this within the window. The window also needs at least 2 m of motion of each robot (fixed in the code). |
+| `motion_gate` | `"both"` | Which robots must move for a new estimate, both between estimates (`min_traveled_*`) and over the window (2 m). `"both"`: the relative yaw is only observable from ranges when both robots move; with one static, the other's frame can rotate about it. `"either"`: estimates also while one robot is static. That case is degenerate, so it is meant for experiments that show it. |
 | `min_measurements` | 50 | Minimum number of ranges in the window to compute an estimate. |
 | `measurement_stdev` | 0.1 m | Standard deviation of a UWB range. |
 | `use_prior` | true | Compute a closed-form linear solution first and use it as a prior for the nonlinear refinement. |

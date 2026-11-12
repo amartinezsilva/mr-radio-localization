@@ -9,6 +9,7 @@ eliko_global_opt_node:
     min_traveled_distance: 0.5 #m
     min_traveled_angle: 0.262 #radians 15 deg approx
     max_traveled_distance: 10.0 #m
+    motion_gate: "both" #robots that must move for a new estimate: "both" (relative yaw observable) or "either" (also while one is static: degenerate, for experiments)
     measurement_stdev: 0.12 #m
     odom_error_position: 2.0 # %,  meters for every 100 meters traveled
     odom_error_angle: 2.0 # % degrees for every 100 degrees
