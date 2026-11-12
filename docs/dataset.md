@@ -52,7 +52,7 @@ ros2 bag record /eliko_optimization_node/optimized_T /pose_graph_node/agv_poses 
   /pose_graph_node/agv_anchor /pose_graph_node/uav_anchor /dll_node/pose_estimation /dll_node_arco/pose_estimation
 ```
 
-**What to expect.** The [paper](https://arxiv.org/abs/2509.26558) reports these results on this dataset, against the DLL ground truth:
+**What to expect.** The [paper](https://doi.org/10.1109/ICRA57385.2026.11696767) reports these results on this dataset, against the DLL ground truth:
 
 | | Translational ATE | Angular RMSE |
 |---|---|---|

@@ -1,13 +1,13 @@
 
-<h1 align="center"><a href="https://arxiv.org/abs/2509.26558" style="text-decoration:none;color:inherit;">Radio-based Multi-Robot Odometry and Relative Localization</a></h1>
+<h1 align="center"><a href="https://doi.org/10.1109/ICRA57385.2026.11696767" style="text-decoration:none;color:inherit;">Radio-based Multi-Robot Odometry and Relative Localization</a></h1>
 
 <div align="center">
   <a href="https://www.youtube.com/watch?v=zTdIhjTZPeA"><img src="https://img.shields.io/badge/YouTube-Video-red?logo=youtube" alt="YouTube Video"></a>
-  <a href="https://arxiv.org/abs/2509.26558"><img src="https://img.shields.io/badge/arXiv-Paper-b31b1b?logo=arxiv" alt="arXiv Paper"></a>
-  </a>
+  <a href="https://doi.org/10.1109/ICRA57385.2026.11696767"><img src="https://img.shields.io/badge/IEEE-ICRA%202026-00629B?logo=ieee" alt="IEEE ICRA 2026 Paper"></a>
+  <a href="https://arxiv.org/abs/2509.26558"><img src="https://img.shields.io/badge/arXiv-2509.26558-b31b1b?logo=arxiv" alt="arXiv Preprint"></a>
 </div>
 
-❗ **This work has been accepted to ICRA 2026!**
+❗ **This work has been published at IEEE ICRA 2026**, pp. 17557–17564 ([DOI: 10.1109/ICRA57385.2026.11696767](https://doi.org/10.1109/ICRA57385.2026.11696767)). See [Cite this work](#cite-this-work).
 
 ### Abstract
 Radio-based methods such as Ultra-Wideband (UWB) and RAdio Detection And Ranging (RADAR), which have traditionally seen limited adoption in robotics, are experiencing a boost in popularity thanks to their robustness to harsh environmental conditions and cluttered environments. This work proposes a multi-robot UGV-UAV localization system that leverages the two technologies with inexpensive and readily-available sensors (Inertial Measurement Units, or IMUs, and wheel encoders) to estimate the relative position of an aerial robot with respect to a ground robot. The first stage of the system pipeline includes a nonlinear optimization framework to trilaterate the location of the aerial platform based on UWB range data, and a RADAR pre-processing module with loosely coupled ego-motion estimation which has been adapted for a multi-robot scenario. Then, the pre-processed RADAR data as well as the relative transformation are fed to a pose-graph optimization framework with odometry and inter-robot constraints. The system, implemented for the Robotic Operating System (ROS 2) with the Ceres optimizer, has been validated in Software-in-the-Loop (SITL) simulations and in a real-world dataset. The relative localization module outperforms state-of-the-art closed-form methods which are less robust to noise. Our SITL environment includes a custom Gazebo plugin for generating realistic UWB measurements modeled after real data.  Conveniently, the proposed factor graph formulation makes the system readily extensible to full Simultaneous Localization And Mapping (SLAM).  Finally, all the code and experimental data have been made publicly available to support reproducibility and to serve as a common open dataset for benchmarking.
@@ -142,3 +142,21 @@ The work is in this repository is part of a multiple year research project backe
 This work was supported by the grants PICRAH 4.0 0 (PLEC2023-010353): funded by the Spanish Ministry of Science and Innovation and the Spanish Research Agency (MCIN/AEI/10.13039/501100011033); and INSERTION (PID2021-127648OB-C31), funded by “Agencia Estatal de Investigación – Ministerio de Ciencia, Innovación y Universidades” and the “European Union NextGenerationEU/PRTR”.
 
 ![](images/fondos_proyectos.png)
+
+# Cite this work
+
+If you use this code or the dataset in your research, please cite:
+
+> A. Martínez-Silva, D. Alejo, L. Merino and F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization," *2026 IEEE International Conference on Robotics and Automation (ICRA)*, Vienna, Austria, 2026, pp. 17557–17564, doi: [10.1109/ICRA57385.2026.11696767](https://doi.org/10.1109/ICRA57385.2026.11696767).
+
+```bibtex
+@inproceedings{martinezsilva2026radio,
+  author    = {Mart{\'i}nez-Silva, Andr{\'e}s and Alejo, David and Merino, Luis and Caballero, Fernando},
+  title     = {Radio-based Multi-Robot Odometry and Relative Localization},
+  booktitle = {2026 IEEE International Conference on Robotics and Automation (ICRA)},
+  address   = {Vienna, Austria},
+  year      = {2026},
+  pages     = {17557--17564},
+  doi       = {10.1109/ICRA57385.2026.11696767}
+}
+```
