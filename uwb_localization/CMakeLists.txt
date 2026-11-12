@@ -27,6 +27,19 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
+# GTSAM (>= 4.3, built from source: the ROS binary package is 4.2) is
+# optional: without it only the Ceres pose-graph backend is built (asking for
+# a GTSAM backend then fails at startup with a clear message).
+option(UWB_LOCALIZATION_WITH_GTSAM "Build the GTSAM pose-graph backend if GTSAM is found" ON)
+if(UWB_LOCALIZATION_WITH_GTSAM)
+  find_package(GTSAM 4.3 QUIET)
+endif()
+if(GTSAM_FOUND)
+  message(STATUS "uwb_localization: GTSAM ${GTSAM_VERSION} found, building the GTSAM pose-graph backend")
+else()
+  message(STATUS "uwb_localization: GTSAM >= 4.3 not found/disabled, building the Ceres pose-graph backend only")
+endif()
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/UpdatePointClouds.srv"
   "msg/PoseWithCovarianceStampedArray.msg"
@@ -45,7 +58,16 @@ include_directories(${pcl_conversions_INCLUDE_DIRS})
 include_directories(${pcl_ros_INCLUDE_DIRS})
 
 # --- add pose optimization library ---
-add_library(pose_optimization_lib SHARED src/poseOptimization.cpp)
+add_library(pose_optimization_lib SHARED
+  src/poseOptimization.cpp
+  src/posegraph_backend.cpp
+  src/ceres_backend.cpp
+)
+if(GTSAM_FOUND)
+  target_sources(pose_optimization_lib PRIVATE src/gtsam_backend.cpp)
+  target_link_libraries(pose_optimization_lib gtsam)
+  target_compile_definitions(pose_optimization_lib PUBLIC UWB_LOCALIZATION_WITH_GTSAM)
+endif()
 
 target_include_directories(pose_optimization_lib PUBLIC ${PUBLIC_INC})
 target_compile_features(pose_optimization_lib PUBLIC c_std_99 cxx_std_17)
@@ -169,6 +191,13 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # Ceres and GTSAM backends solve the same model (needs GTSAM).
+  if(GTSAM_FOUND)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_posegraph_backends test/test_posegraph_backends.cpp)
+    target_link_libraries(test_posegraph_backends pose_optimization_lib)
+  endif()
 endif()
 
 ament_package()

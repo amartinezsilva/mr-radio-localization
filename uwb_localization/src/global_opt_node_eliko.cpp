@@ -40,7 +40,6 @@
 
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/CostFunctions.hpp"
-#include "uwb_localization/manifolds.hpp"
 
 using namespace uwb_localization;
 
@@ -992,13 +991,10 @@ private:
             //Update the timestamp
             opt_state.timestamp = current_time;
 
-            // Create an instance of our custom manifold.
-            ceres::Manifold* state_manifold = new StateManifold4D();
-            // Attach it to the parameter block.
+            // Plain 4-DoF block [x, y, z, yaw], no manifold needed: yaw only enters
+            // the residuals through a rotation, so they're 2*pi-periodic in it.
+            // Yaw is normalized to [-pi, pi] right after the solve instead.
             problem.AddParameterBlock(opt_state.state.data(), 4);
-
-            //Tell the optimizer to perform updates in the manifold space
-            problem.SetManifold(opt_state.state.data(), state_manifold);
 
             // Define a robust kernel
             double loss_threshold = 2.5; // = residuals higher than 2.5 times sigma are outliers
@@ -1043,6 +1039,7 @@ private:
             ceres::Solver::Summary summary;
             ceres::Solve(options, &problem, &summary);
             RCLCPP_INFO(this->get_logger(), summary.BriefReport().c_str());
+            opt_state.state[3] = normalizeAngle(opt_state.state[3]);
 
             // Notify and update values if optimization converged
             if (summary.termination_type == ceres::CONVERGENCE){
