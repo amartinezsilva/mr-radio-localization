@@ -1,0 +1,70 @@
+# Builds FROM the UWBPX4Sim base image (see UWBPX4Sim/docker/Dockerfile),
+# which provides PX4 SITL, Gazebo Harmonic, and the UWB plugin/ROS 2 bridge
+# already built under ~/ros2_ws. This Dockerfile adds only the
+# radar/localization-specific dependencies and mr-radio-localization's own
+# ROS 2 package (uwb_localization) as a sibling in that same
+# workspace -- colcon builds them incrementally, so rebuilding after a
+# localization-only code change never touches the PX4/Gazebo layers.
+#
+# For running against your own bags without the simulator, see the
+# standalone Dockerfile instead (`./setup.sh`, the default). The
+# localization dependencies themselves are installed by
+# install_localization_deps.sh, shared with that Dockerfile.
+#
+# `uwbpx4sim:jazzy` must already exist locally -- this repo's own
+# docker/setup.sh builds it first automatically if it's missing (see that
+# script's comments), rather than this Dockerfile trying to build or pull
+# it itself.
+FROM uwbpx4sim:jazzy
+
+# The base image ends as USER jazzy -- switch back to root for the
+# privileged installs below, same as the base Dockerfile's own structure.
+USER root
+
+# Build context: the repository root (see docker-compose.yml and the
+# .dockerignore there, which keeps bags/ out of it).
+COPY docker/install_localization_deps.sh /usr/local/bin/install_localization_deps.sh
+RUN chmod +x /usr/local/bin/install_localization_deps.sh && \
+    install_localization_deps.sh system /home/jazzy/ros2_ws
+
+# This repository: your local checkout (the build context), exactly as it
+# is -- branch, uncommitted changes and all -- so the image is built from
+# the same source docker-compose.yml then mounts over it at runtime.
+COPY . /home/jazzy/ros2_ws/src/mr-radio-localization
+SHELL ["/bin/bash", "-c"]
+
+RUN install_localization_deps.sh rosdep /home/jazzy/ros2_ws
+
+RUN chown -R jazzy:jazzy /home/jazzy/ros2_ws/src
+
+# Record which source the binaries below are built from (a hash of the
+# compiled files, localization_source_state in localization-lib.sh). At
+# runtime the host checkout is mounted over this copy (docker-compose.yml),
+# and the menu compares the two to tell you when a rebuild is needed.
+RUN source /home/jazzy/ros2_ws/src/mr-radio-localization/docker/localization-lib.sh && \
+    LOCALIZATION_SRC=/home/jazzy/ros2_ws/src/mr-radio-localization localization_source_state \
+      > /home/jazzy/.uwb_localization_build_state && \
+    test -s /home/jazzy/.uwb_localization_build_state
+
+# Builds incrementally: UWBPX4Sim's packages are already built (from the
+# base image's own colcon build layer) and won't be redone -- only
+# uwb_localization and the radar packages added above are new. The whole
+# home directory is chowned afterwards (not just ros2_ws), since the build
+# runs as root. BUILD_TESTING=OFF: the tests aren't run in the image, and
+# ars548_driver's own unit tests don't compile against its current jazzy branch.
+RUN cd /home/jazzy/ros2_ws && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install --cmake-args -DBUILD_TESTING=OFF && \
+    chown -R jazzy:jazzy /home/jazzy
+
+# Guided entrypoint -- extends UWBPX4Sim's (sources its function library,
+# adds a "Launch localization" menu option). Overwrites the base image's
+# thin wrapper at the same path; /uwbpx4sim-entrypoint-lib.sh (from the
+# base image) is left in place and sourced from here.
+COPY docker/localization-lib.sh /localization-lib.sh
+COPY docker/entrypoint-sim.sh /entrypoint.sh
+RUN chmod +x /localization-lib.sh /entrypoint.sh && chown jazzy:jazzy /entrypoint.sh
+
+USER jazzy
+
+# HOME/WORKDIR/PX4_DIR are already set correctly by the base image.
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["menu"]

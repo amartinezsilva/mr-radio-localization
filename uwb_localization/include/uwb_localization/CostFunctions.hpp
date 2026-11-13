@@ -4,279 +4,187 @@
 #include <ceres/ceres.h>
 #include <sophus/se3.hpp>
 #include <Eigen/Core>
+#include <Eigen/Cholesky>
+
+#include "uwb_localization/utils.hpp"  // buildSE3
 
 namespace uwb_localization
 {
-   // Residual struct for Ceres
+    // ---------------------------------------------------------------------
+    // Shared building blocks
+    // ---------------------------------------------------------------------
+    //
+    // Every node is 4-DoF: state = [x, y, z, yaw]. Roll and pitch are not
+    // optimized; they come from the IMU and are passed to each factor as
+    // constants. The pose of a state is built with buildSE3 (utils.hpp).
+
+    // Square-root information matrix S such that ||S e||^2 = e^T cov^{-1} e,
+    // with cov = L L^T (Cholesky) and S = L^{-1}: S^T S = L^{-T} L^{-1} = cov^{-1}.
+    // Computed once per factor.
+    inline Eigen::Matrix4d sqrtInformation(const Eigen::Matrix4d& covariance) {
+        Eigen::LLT<Eigen::Matrix4d> chol(covariance);
+        return chol.matrixL().solve(Eigen::Matrix4d::Identity());
+    }
+
+    // Weighted 4-DoF error between a measured and a predicted pose:
+    //   T_err = T_meas^{-1} * T_pred,  xi = log(T_err) = [rho; phi],
+    //   e = [rho_x, rho_y, rho_z, phi_z],  residual = S * e.
+    template <typename T>
+    void weightedPoseError4D(const Sophus::SE3d& T_meas,
+                             const Eigen::Matrix4d& sqrt_information,
+                             const Sophus::SE3<T>& T_pred,
+                             T* residual) {
+        const Sophus::SE3<T> T_err = T_meas.template cast<T>().inverse() * T_pred;
+        const Eigen::Matrix<T, 6, 1> xi = T_err.log();
+
+        Eigen::Matrix<T, 4, 1> error;
+        error.template head<3>() = xi.template head<3>();  // translation
+        error[3] = xi[5];                                   // yaw (z of the rotation vector)
+
+        Eigen::Map<Eigen::Matrix<T, 4, 1>> weighted(residual);
+        weighted = sqrt_information.template cast<T>() * error;
+    }
+
+    // ---------------------------------------------------------------------
+    // UWB range factor (relative transform estimation, global_opt_node_eliko)
+    // ---------------------------------------------------------------------
     struct UWBCostFunction {
-    UWBCostFunction(const Eigen::Vector3d& anchor, const Eigen::Vector3d& tag, double measured_distance, double roll, double pitch, double measurement_stdev)
-        : anchor_(anchor), tag_(tag), measured_distance_(measured_distance), roll_(roll), pitch_(pitch), measurement_stdev_inv_(1.0 / measurement_stdev) {}
-
-    template <typename T>
-    bool operator()(const T* const state, T* residual) const {
-
-            // Build the 4x4 transformation matrix
-            Sophus::SE3<T> SE3_rel = buildTransformationSE3(state, roll_, pitch_);
-
-            // Transform the anchor point using the robot pose.
-            Eigen::Matrix<T,3,1> anchor_vec;
-            anchor_vec << T(anchor_(0)), T(anchor_(1)), T(anchor_(2));
-            Eigen::Matrix<T,3,1> anchor_transformed = SE3_rel * anchor_vec;
-            
-            // Compute the predicted distance from the transformed anchor to the tag.
-            Eigen::Matrix<T,3,1> tag_vec;
-            tag_vec << T(tag_(0)), T(tag_(1)), T(tag_(2));
-            T predicted_distance = (tag_vec - anchor_transformed).norm();
-
-            // Residual as (measured - predicted)
-            residual[0] = T(measured_distance_) - predicted_distance;
-            residual[0] *= T(measurement_stdev_inv_);  // Scale residual
-
-            //std::cout << "Measurement residual: " << residual[0] << std::endl;
-
-            return true;
-    }
-
-    static ceres::CostFunction* Create(const Eigen::Vector3d& anchor, const Eigen::Vector3d& tag, double measured_distance, double roll, double pitch, double measurement_stdev) {
-        return (new ceres::AutoDiffCostFunction<UWBCostFunction, 1, 4>(
-            new UWBCostFunction(anchor, tag, measured_distance, roll, pitch, measurement_stdev)));
-    }
-
-    template <typename T>
-    Sophus::SE3<T> buildTransformationSE3(const T* state, double roll, double pitch) const{
-        // Extract translation
-        Eigen::Matrix<T, 3, 1> t;
-        t << state[0], state[1], state[2];
-        // Build rotation from yaw, with fixed roll and pitch
-        Eigen::Matrix<T, 3, 3> R = (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T, 3, 1>::UnitZ()) *
-                                    Eigen::AngleAxis<T>(T(pitch), Eigen::Matrix<T, 3, 1>::UnitY()) *
-                                    Eigen::AngleAxis<T>(T(roll),  Eigen::Matrix<T, 3, 1>::UnitX())).toRotationMatrix();
-        // Return the Sophus SE3 object
-        return Sophus::SE3<T>(R, t);
-    }
-
-    const Eigen::Vector3d anchor_;
-    const Eigen::Vector3d tag_;
-    const double measured_distance_;
-    const double roll_;
-    const double pitch_;
-    const double measurement_stdev_inv_;
-    };
-
-    struct PriorCostFunction {
-        PriorCostFunction(const Sophus::SE3d& prior_T, const double &roll, const double &pitch, const Eigen::Matrix4d& prior_covariance)
-            : prior_T_(prior_T), roll_(roll), pitch_(pitch), prior_covariance_(prior_covariance) {}
+        UWBCostFunction(const Eigen::Vector3d& anchor, const Eigen::Vector3d& tag, double measured_distance,
+                        double roll, double pitch, double measurement_stdev)
+            : anchor_(anchor), tag_(tag), measured_distance_(measured_distance),
+              roll_(roll), pitch_(pitch), measurement_stdev_inv_(1.0 / measurement_stdev) {}
 
         template <typename T>
         bool operator()(const T* const state, T* residual) const {
-            
-            Sophus::SE3<T> SE3_pred = buildTransformationSE3(state, roll_, pitch_);
-            Sophus::SE3<T> T_meas = prior_T_.template cast<T>();
+            // Transform the anchor with the relative pose, then compare the
+            // predicted anchor-tag distance with the measured range.
+            const Sophus::SE3<T> SE3_rel = buildSE3(state, roll_, pitch_);
+            const Eigen::Matrix<T, 3, 1> anchor_transformed = SE3_rel * anchor_.cast<T>();
+            const T predicted_distance = (tag_.cast<T>() - anchor_transformed).norm();
 
-            // Compute the error transformation: T_err = T_meas^{-1} * T_pred.
-            Sophus::SE3<T> T_err = T_meas.inverse() * SE3_pred;
-            
-            // Compute the full 6-vector logarithm (xi = [rho; phi]),
-            // where phi is the rotation vector.
-            Eigen::Matrix<T,6,1> xi = T_err.log();
-
-            // Project the 6-vector error onto the 4-DOF space:
-            // Keep the three translation components and only the z component of the rotation.
-            Eigen::Matrix<T,4,1> error_vec;
-            error_vec.template segment<3>(0) = xi.template segment<3>(0); // translation error
-            error_vec[3] = xi[5];  // use the z-component (yaw) of the rotation error
-
-            // Scale by the square root of the inverse covariance matrix
-            Eigen::LLT<Eigen::Matrix4d> chol(prior_covariance_);
-            Eigen::Matrix4d sqrt_inv_covariance = Eigen::Matrix4d(chol.matrixL().transpose()).inverse();
-            //Eigen::Matrix4d sqrt_covariance = Eigen::Matrix4d(chol.matrixL());
-
-            Eigen::Matrix<T, 4, 1> weighted_residual = sqrt_inv_covariance.cast<T>() * error_vec;
-
-            // Assign to residual
-            residual[0] = weighted_residual[0];
-            residual[1] = weighted_residual[1];
-            residual[2] = weighted_residual[2];
-            residual[3] = weighted_residual[3];
-
+            residual[0] = (T(measured_distance_) - predicted_distance) * T(measurement_stdev_inv_);
             return true;
         }
 
-        static ceres::CostFunction* Create(const Sophus::SE3d& prior_T, const double& roll, const double &pitch, const Eigen::Matrix4d& prior_covariance) {
+        static ceres::CostFunction* Create(const Eigen::Vector3d& anchor, const Eigen::Vector3d& tag, double measured_distance,
+                                           double roll, double pitch, double measurement_stdev) {
+            return new ceres::AutoDiffCostFunction<UWBCostFunction, 1, 4>(
+                new UWBCostFunction(anchor, tag, measured_distance, roll, pitch, measurement_stdev));
+        }
+
+        const Eigen::Vector3d anchor_;
+        const Eigen::Vector3d tag_;
+        const double measured_distance_;
+        const double roll_;
+        const double pitch_;
+        const double measurement_stdev_inv_;
+    };
+
+    // ---------------------------------------------------------------------
+    // Pose-graph factors. All three use the same 4-DoF pose error and differ
+    // only in how the predicted pose is built from their parameter blocks.
+    // ---------------------------------------------------------------------
+
+    // Unary prior on one node: T_pred = T(state).
+    struct PriorCostFunction {
+        PriorCostFunction(const Sophus::SE3d& prior_T, const double& roll, const double& pitch,
+                          const Eigen::Matrix4d& prior_covariance)
+            : prior_T_(prior_T), roll_(roll), pitch_(pitch),
+              sqrt_information_(sqrtInformation(prior_covariance)) {}
+
+        template <typename T>
+        bool operator()(const T* const state, T* residual) const {
+            weightedPoseError4D(prior_T_, sqrt_information_, buildSE3(state, roll_, pitch_), residual);
+            return true;
+        }
+
+        static ceres::CostFunction* Create(const Sophus::SE3d& prior_T, const double& roll, const double& pitch,
+                                           const Eigen::Matrix4d& prior_covariance) {
             return new ceres::AutoDiffCostFunction<PriorCostFunction, 4, 4>(
                 new PriorCostFunction(prior_T, roll, pitch, prior_covariance));
         }
 
     private:
-
-        template <typename T>
-        Sophus::SE3<T> buildTransformationSE3(const T* state, double roll, double pitch) const {
-            // Extract translation
-            Eigen::Matrix<T, 3, 1> t;
-            t << state[0], state[1], state[2];
-            // Build rotation from yaw, with fixed roll and pitch
-            Eigen::Matrix<T, 3, 3> R = (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T, 3, 1>::UnitZ()) *
-                                        Eigen::AngleAxis<T>(T(pitch), Eigen::Matrix<T, 3, 1>::UnitY()) *
-                                        Eigen::AngleAxis<T>(T(roll),  Eigen::Matrix<T, 3, 1>::UnitX())).toRotationMatrix();
-            // Return the Sophus SE3 object
-            return Sophus::SE3<T>(R, t);
-        }
-
         const Sophus::SE3d prior_T_;
         const double roll_, pitch_;
-        const Eigen::Matrix4d prior_covariance_;
+        const Eigen::Matrix4d sqrt_information_;
     };
 
-
+    // Relative pose between two nodes of the same robot (odometry, radar):
+    // T_pred = T_target^{-1} * T_source.
     struct MeasurementResidual {
-        MeasurementResidual(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov, double source_roll, double source_pitch, double target_roll, double target_pitch)
-            : T_meas_(T_meas), cov_(cov), source_roll_(source_roll), source_pitch_(source_pitch), target_roll_(target_roll), target_pitch_(target_pitch) {}
-    
+        MeasurementResidual(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov,
+                            double source_roll, double source_pitch, double target_roll, double target_pitch)
+            : T_meas_(T_meas), sqrt_information_(sqrtInformation(cov)),
+              source_roll_(source_roll), source_pitch_(source_pitch),
+              target_roll_(target_roll), target_pitch_(target_pitch) {}
+
         template <typename T>
         bool operator()(const T* const source_state, const T* const target_state, T* residual) const {
-            // Build homogeneous transforms from the state vectors.
-            Sophus::SE3<T> T_s = buildTransformationSE3(source_state, source_roll_, source_pitch_);
-            Sophus::SE3<T> T_t = buildTransformationSE3(target_state, target_roll_, target_pitch_);
-            
-            // Compute the relative transform from AGV to UAV:
-            Sophus::SE3<T> SE3_pred = T_t.inverse() * T_s;
-            Sophus::SE3<T> SE3_meas = T_meas_.template cast<T>();
-    
-            // Compute the error transformation: T_err = T_meas^{-1} * T_pred.
-            Sophus::SE3<T> T_err = SE3_meas.inverse() * SE3_pred;
-            
-            // Compute the full 6-vector logarithm (xi = [rho; phi]),
-            // where phi is the rotation vector.
-            Eigen::Matrix<T,6,1> xi = T_err.log();
-    
-            // Project the 6-vector error onto the 4-DOF space:
-            // Keep the three translation components and only the z component of the rotation.
-            Eigen::Matrix<T,4,1> error_vec;
-            error_vec.template head<3>() = xi.template head<3>();
-            error_vec[3] = xi[5];  // use the z-component (yaw) of the rotation error
-    
-            // Scale by the square root of the inverse covariance matrix
-            Eigen::LLT<Eigen::Matrix4d> chol(cov_);
-            Eigen::Matrix4d sqrt_inv_covariance = Eigen::Matrix4d(chol.matrixL().transpose()).inverse();
-            
-            Eigen::Matrix<T, 4, 1> weighted_residual = sqrt_inv_covariance.cast<T>() * error_vec;
-    
-            // Assign to residual
-            residual[0] = weighted_residual[0];
-            residual[1] = weighted_residual[1];
-            residual[2] = weighted_residual[2];
-            residual[3] = weighted_residual[3];
-    
+            const Sophus::SE3<T> T_s = buildSE3(source_state, source_roll_, source_pitch_);
+            const Sophus::SE3<T> T_t = buildSE3(target_state, target_roll_, target_pitch_);
+            weightedPoseError4D(T_meas_, sqrt_information_, T_t.inverse() * T_s, residual);
             return true;
         }
-    
-        static ceres::CostFunction* Create(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov, double source_roll, double source_pitch, double target_roll, double target_pitch) {
+
+        static ceres::CostFunction* Create(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov,
+                                           double source_roll, double source_pitch,
+                                           double target_roll, double target_pitch) {
             return new ceres::AutoDiffCostFunction<MeasurementResidual, 4, 4, 4>(
                 new MeasurementResidual(T_meas, cov, source_roll, source_pitch, target_roll, target_pitch));
         }
-    
-        private:
-            template <typename T>
-            Sophus::SE3<T> buildTransformationSE3(const T* state, double roll, double pitch) const {
-                // Extract translation
-                Eigen::Matrix<T, 3, 1> t;
-                t << state[0], state[1], state[2];
-                // Build rotation from yaw, with fixed roll and pitch
-                Eigen::Matrix<T, 3, 3> R = (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T, 3, 1>::UnitZ()) *
-                                            Eigen::AngleAxis<T>(T(pitch), Eigen::Matrix<T, 3, 1>::UnitY()) *
-                                            Eigen::AngleAxis<T>(T(roll),  Eigen::Matrix<T, 3, 1>::UnitX())).toRotationMatrix();
-                // Return the Sophus SE3 object
-                return Sophus::SE3<T>(R, t);
-            }
-    
+
+    private:
         const Sophus::SE3d T_meas_;
-        const Eigen::Matrix4d cov_;
+        const Eigen::Matrix4d sqrt_information_;
         const double source_roll_, source_pitch_;
         const double target_roll_, target_pitch_;
-    
     };
 
-
+    // Relative pose between nodes of different robots (UWB, radar encounters),
+    // each expressed in the common frame through its robot's anchor node:
+    // T_pred = (anchor_uav * T_target)^{-1} * (anchor_agv * T_source).
     struct AnchorResidual {
-        AnchorResidual(const Sophus::SE3d &T_meas, const Eigen::Matrix4d &cov, 
-                        double source_roll, double source_pitch, 
-                        double target_roll, double target_pitch,
-                        double anchor_roll_uav, double anchor_pitch_uav,
-                        double anchor_roll_agv, double anchor_pitch_agv)
-          : T_meas_(T_meas), cov_(cov), source_roll_(source_roll), source_pitch_(source_pitch), 
-            target_roll_(target_roll), target_pitch_(target_pitch), 
-            anchor_roll_uav_(anchor_roll_uav), anchor_pitch_uav_(anchor_pitch_uav),
-            anchor_roll_agv_(anchor_roll_agv), anchor_pitch_agv_(anchor_pitch_agv) {}
-      
+        AnchorResidual(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov,
+                       double source_roll, double source_pitch,
+                       double target_roll, double target_pitch,
+                       double anchor_roll_uav, double anchor_pitch_uav,
+                       double anchor_roll_agv, double anchor_pitch_agv)
+            : T_meas_(T_meas), sqrt_information_(sqrtInformation(cov)),
+              source_roll_(source_roll), source_pitch_(source_pitch),
+              target_roll_(target_roll), target_pitch_(target_pitch),
+              anchor_roll_uav_(anchor_roll_uav), anchor_pitch_uav_(anchor_pitch_uav),
+              anchor_roll_agv_(anchor_roll_agv), anchor_pitch_agv_(anchor_pitch_agv) {}
+
         template <typename T>
-        bool operator()(const T* const source_state, const T* const target_state, const T* const T_anchor_uav, const T* const T_anchor_agv, T* residual) const {
-        
-          // Build homogeneous transforms from the state vectors.
-          Sophus::SE3<T> T_s = buildTransformationSE3(source_state, source_roll_, source_pitch_);
-          Sophus::SE3<T> T_t = buildTransformationSE3(target_state, target_roll_, target_pitch_);
-
-          // Build the extra transformation from UAV local frame into AGV frame.
-          Sophus::SE3<T> anchor_T_t = buildTransformationSE3(T_anchor_uav, anchor_roll_uav_, anchor_pitch_uav_);
-          Sophus::SE3<T> anchor_T_s = buildTransformationSE3(T_anchor_agv, anchor_roll_agv_, anchor_pitch_agv_);
-
-          Sophus::SE3<T> w_T_s = anchor_T_s * T_s;
-          Sophus::SE3<T> w_T_t = anchor_T_t * T_t;
-
-          Sophus::SE3<T> T_pred = w_T_t.inverse() * w_T_s;
-
-          Sophus::SE3<T> T_err = T_meas_.template cast<T>().inverse() * T_pred;
-          Eigen::Matrix<T, 6, 1> xi = T_err.log();
-      
-          // Project the 6-vector error onto the 4-DOF space (translation and yaw).
-          Eigen::Matrix<T, 4, 1> error_vec;
-          error_vec.template head<3>() = xi.template head<3>();
-          error_vec[3] = xi[5];
-      
-          // Scale by the square root of the inverse covariance matrix
-          Eigen::LLT<Eigen::Matrix4d> chol(cov_);
-          Eigen::Matrix4d sqrt_inv_cov = Eigen::Matrix4d(chol.matrixL().transpose()).inverse();
-          Eigen::Matrix<T, 4, 1> weighted_residual = sqrt_inv_cov.cast<T>() * error_vec;
-
-          // Assign to residual
-          residual[0] = weighted_residual[0];
-          residual[1] = weighted_residual[1];
-          residual[2] = weighted_residual[2];
-          residual[3] = weighted_residual[3];
-      
-          return true;
+        bool operator()(const T* const source_state, const T* const target_state,
+                        const T* const T_anchor_uav, const T* const T_anchor_agv, T* residual) const {
+            const Sophus::SE3<T> w_T_s = buildSE3(T_anchor_agv, anchor_roll_agv_, anchor_pitch_agv_) *
+                                         buildSE3(source_state, source_roll_, source_pitch_);
+            const Sophus::SE3<T> w_T_t = buildSE3(T_anchor_uav, anchor_roll_uav_, anchor_pitch_uav_) *
+                                         buildSE3(target_state, target_roll_, target_pitch_);
+            weightedPoseError4D(T_meas_, sqrt_information_, w_T_t.inverse() * w_T_s, residual);
+            return true;
         }
-      
-        static ceres::CostFunction* Create(const Sophus::SE3d &T_meas, const Eigen::Matrix4d &cov, 
-                                            double source_roll, double source_pitch, 
-                                            double target_roll, double target_pitch,
-                                            double anchor_roll_uav, double anchor_pitch_uav,
-                                            double anchor_roll_agv, double anchor_pitch_agv) {
-          return new ceres::AutoDiffCostFunction<AnchorResidual, 4, 4, 4, 4, 4>(
-            new AnchorResidual(T_meas, cov, source_roll, source_pitch, target_roll, target_pitch, anchor_roll_uav, anchor_pitch_uav, anchor_roll_agv, anchor_pitch_agv));
+
+        static ceres::CostFunction* Create(const Sophus::SE3d& T_meas, const Eigen::Matrix4d& cov,
+                                           double source_roll, double source_pitch,
+                                           double target_roll, double target_pitch,
+                                           double anchor_roll_uav, double anchor_pitch_uav,
+                                           double anchor_roll_agv, double anchor_pitch_agv) {
+            return new ceres::AutoDiffCostFunction<AnchorResidual, 4, 4, 4, 4, 4>(
+                new AnchorResidual(T_meas, cov, source_roll, source_pitch, target_roll, target_pitch,
+                                   anchor_roll_uav, anchor_pitch_uav, anchor_roll_agv, anchor_pitch_agv));
         }
-      
-      private:
-        // Helper function to build a 4-DOF SE3 transformation given a state and fixed roll, pitch.
-        template <typename T>
-        Sophus::SE3<T> buildTransformationSE3(const T* state, double roll, double pitch) const {
-            // Extract translation
-            Eigen::Matrix<T, 3, 1> t;
-            t << state[0], state[1], state[2];
-            // Build rotation from yaw, with fixed roll and pitch
-            Eigen::Matrix<T, 3, 3> R = (Eigen::AngleAxis<T>(state[3], Eigen::Matrix<T, 3, 1>::UnitZ()) *
-                                        Eigen::AngleAxis<T>(T(pitch), Eigen::Matrix<T, 3, 1>::UnitY()) *
-                                        Eigen::AngleAxis<T>(T(roll),  Eigen::Matrix<T, 3, 1>::UnitX())).toRotationMatrix();
-            // Return the Sophus SE3 object
-            return Sophus::SE3<T>(R, t);
-        }
-      
+
+    private:
         const Sophus::SE3d T_meas_;
-        const Eigen::Matrix4d cov_;
+        const Eigen::Matrix4d sqrt_information_;
         const double source_roll_, source_pitch_;
         const double target_roll_, target_pitch_;
         const double anchor_roll_uav_, anchor_pitch_uav_;
         const double anchor_roll_agv_, anchor_pitch_agv_;
-      };
+    };
 
 }
 

@@ -1,0 +1,30 @@
+# Override for Windows hosts running Docker Desktop from a WSL2 distro
+# (setup.sh layers it on automatically when it detects WSL). Plain
+# `docker compose` from WSL needs it passed explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.wsl.yml run ...
+#
+# Under WSL there is no NVIDIA GLX driver -- the GPU is only reachable
+# through Mesa's d3d12 driver, which needs libd3d12.so from the distro's
+# /usr/lib/wsl (Docker Desktop's GPU passthrough only injects the CUDA
+# side). Without this, Gazebo silently falls back to llvmpipe (CPU).
+# Check with `glxinfo -B` inside the container: the renderer should read
+# "D3D12 (NVIDIA ...)".
+#
+# Applies to the `sim` service only: the standalone image renders RViz in
+# software and needs no GPU, so it's left untouched (and still starts on
+# WSL hosts without GPU passthrough / /dev/dxg).
+
+services:
+  sim:
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - GALLIUM_DRIVER=d3d12
+      # Picks the NVIDIA adapter over an integrated GPU on hybrid laptops.
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      # The base file's PRIME offload vars point GLX at the NVIDIA vendor
+      # library, which doesn't exist under WSL -- route it to Mesa instead.
+      - __GLX_VENDOR_LIBRARY_NAME=mesa
+    volumes:
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    devices:
+      - /dev/dxg

@@ -1,0 +1,11 @@
+# Build context of the Docker images (docker/docker-compose.yml): the whole
+# repository, which they COPY. Exclude only what git doesn't track (mirror
+# .gitignore): the image records `git diff HEAD` of its copy, so excluding a
+# tracked file would make every container report the checkout as changed.
+
+# Recorded rosbags (GBs): mounted from the host at runtime instead.
+uwb_localization/bags/*
+!uwb_localization/bags/README.md
+
+plots/
+**/*.pyc

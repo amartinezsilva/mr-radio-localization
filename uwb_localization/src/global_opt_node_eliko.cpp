@@ -40,7 +40,6 @@
 
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/CostFunctions.hpp"
-#include "uwb_localization/manifolds.hpp"
 
 using namespace uwb_localization;
 
@@ -218,13 +217,17 @@ private:
         this->declare_parameter<std::string>("distances_topic", "/eliko/Distances");
         this->declare_parameter<std::string>("odom_topic_agv", "/arco/idmind_motors/odom");
         this->declare_parameter<std::string>("odom_topic_uav", "/uav/odom");
-        this->declare_parameter<double>("opt_timer_rate_", 10.0);  // in Hz
+        this->declare_parameter<double>("opt_timer_rate", 10.0);  // in Hz
 
         // Optimization settings
         this->declare_parameter<int>("min_measurements", 50);
         this->declare_parameter<double>("min_traveled_distance", 0.5);   // in meters
         this->declare_parameter<double>("min_traveled_angle", 0.524);      // in radians (0.524 rad ~ 30 deg)
         this->declare_parameter<double>("max_traveled_distance", 10.0);    // in meters
+        // Which robots must move for a new estimate: "both" (default: the relative
+        // yaw is only observable from ranges when both robots move) or "either"
+        // (also estimates while one robot is static, to study that degenerate case).
+        this->declare_parameter<std::string>("motion_gate", "both");
         this->declare_parameter<double>("measurement_stdev", 0.1);         // in meters
         this->declare_parameter<bool>("use_ransac", true);
 
@@ -263,12 +266,17 @@ private:
         this->get_parameter("distances_topic", distances_topic_);
         this->get_parameter("odom_topic_agv", odom_topic_agv_);
         this->get_parameter("odom_topic_uav", odom_topic_uav_);
-        this->get_parameter("opt_timer_rate_", opt_timer_rate_);
+        this->get_parameter("opt_timer_rate", opt_timer_rate_);
         this->get_parameter("min_measurements", min_measurements_);
         this->get_parameter("min_traveled_distance", min_traveled_distance_);
         // Convert angle from degrees to radians.
         this->get_parameter("min_traveled_angle", min_traveled_angle_);
         this->get_parameter("max_traveled_distance", max_traveled_distance_);
+        const std::string motion_gate = this->get_parameter("motion_gate").as_string();
+        if (motion_gate != "both" && motion_gate != "either") {
+            throw std::invalid_argument("motion_gate must be \"both\" or \"either\", got \"" + motion_gate + "\"");
+        }
+        gate_either_ = motion_gate == "either";
         this->get_parameter("measurement_stdev", measurement_stdev_);
         this->get_parameter("use_ransac", use_ransac_);
 
@@ -304,6 +312,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "  min_traveled_distance: %f m", min_traveled_distance_);
         RCLCPP_INFO(this->get_logger(), "  min_traveled_angle: %f rad", min_traveled_angle_);
         RCLCPP_INFO(this->get_logger(), "  max_traveled_distance: %f m", max_traveled_distance_);
+        RCLCPP_INFO(this->get_logger(), "  motion_gate: %s", gate_either_ ? "either" : "both");
         RCLCPP_INFO(this->get_logger(), "  measurement_stdev: %f m", measurement_stdev_);
         RCLCPP_INFO(this->get_logger(), "  odom_error_position: %f", odom_error_distance_);
         RCLCPP_INFO(this->get_logger(), "  odom_error_angle: %f", odom_error_angle_);
@@ -569,6 +578,8 @@ private:
 
             measurement.uav_cumulative_distance = uav_total_translation_;
             measurement.agv_cumulative_distance = agv_total_translation_;
+            measurement.uav_cumulative_rotation = uav_total_rotation_;
+            measurement.agv_cumulative_rotation = agv_total_rotation_;
 
             //Positions of tags and anchors according to odometry
             const auto tag_it = tag_positions_odom_.find(measurement.tag_id);
@@ -626,7 +637,9 @@ private:
         /*Check the robots have moved enough between optimizations*/
         bool uav_enough_movement = uav_delta_translation_ >= min_traveled_distance_ || uav_delta_rotation_ >= min_traveled_angle_;
         bool agv_enough_movement = agv_delta_translation_ >= min_traveled_distance_ || agv_delta_rotation_ >= min_traveled_angle_;
-        if (!uav_enough_movement || !agv_enough_movement) {
+        const bool enough_movement = gate_either_ ? (uav_enough_movement || agv_enough_movement)
+                                                  : (uav_enough_movement && agv_enough_movement);
+        if (!enough_movement) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "[Eliko global_opt node] Insufficient movement UAV = [%.2fm %.2fº], AGV= [%.2fm %.2fº]. Skipping optimization.", uav_delta_translation_, uav_delta_rotation_ * 180.0/M_PI, agv_delta_translation_, agv_delta_rotation_ * 180.0/M_PI);
             return;
         }
@@ -651,7 +664,10 @@ private:
             double uav_disp = latest.uav_cumulative_distance - oldest.uav_cumulative_distance;
             double agv_disp = latest.agv_cumulative_distance - oldest.agv_cumulative_distance;
 
-            if(uav_disp < 2.0 || agv_disp < 2.0){
+            // Each robot must have moved 2 m over the window ("either": at least one of them).
+            const bool enough_disp = gate_either_ ? (uav_disp >= 2.0 || agv_disp >= 2.0)
+                                                  : (uav_disp >= 2.0 && agv_disp >= 2.0);
+            if (!enough_disp) {
                 RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Insufficient displacement in window. UAV displacement = [%.2f], AGV displacement = [%.2f]",
                 uav_disp, agv_disp);
                 return;
@@ -683,10 +699,22 @@ private:
 
         RCLCPP_WARN(this->get_logger(), "[Eliko global_opt node] Movement UAV = [%.2fm %.2fº], AGV= [%.2fm %.2fº].", uav_delta_translation_, uav_delta_rotation_ * 180.0/M_PI, agv_delta_translation_, agv_delta_rotation_ * 180.0/M_PI);
 
-        // Compute odometry covariance based on distance increments from step to step 
+        // Odometry drift within the measurement window. The estimate is the transform between
+        // the two odometry frames as they are now: drift accumulated before the window shifts
+        // the whole window and is absorbed by it (the transform changes over time, it isn't
+        // less certain), so only the drift that warps the odometry within the window adds
+        // uncertainty. (The pose graph models the accumulated drift with its odometry factors.)
+        const UWBMeasurement &window_start = global_measurements_.front();
+        const UWBMeasurement &window_end = global_measurements_.back();
+        const double window_translation =
+            (window_end.uav_cumulative_distance - window_start.uav_cumulative_distance) +
+            (window_end.agv_cumulative_distance - window_start.agv_cumulative_distance);
+        const double window_rotation =
+            (window_end.uav_cumulative_rotation - window_start.uav_cumulative_rotation) +
+            (window_end.agv_cumulative_rotation - window_start.agv_cumulative_rotation);
         Eigen::Matrix4d predicted_motion_covariance = Eigen::Matrix4d::Zero();
-        double predicted_drift_translation = (odom_error_distance_ / 100.0) * (uav_total_translation_ + agv_total_translation_);
-        double predicted_drift_rotation = (odom_error_angle_ / 100.0) * (uav_total_rotation_ + agv_total_rotation_);
+        double predicted_drift_translation = (odom_error_distance_ / 100.0) * window_translation;
+        double predicted_drift_rotation = (odom_error_angle_ / 100.0) * window_rotation;
         predicted_motion_covariance(0,0) = std::pow(predicted_drift_translation, 2.0);
         predicted_motion_covariance(1,1) = std::pow(predicted_drift_translation, 2.0);
         predicted_motion_covariance(2,2) = std::pow(predicted_drift_translation, 2.0);
@@ -992,13 +1020,10 @@ private:
             //Update the timestamp
             opt_state.timestamp = current_time;
 
-            // Create an instance of our custom manifold.
-            ceres::Manifold* state_manifold = new StateManifold4D();
-            // Attach it to the parameter block.
+            // Plain 4-DoF block [x, y, z, yaw], no manifold needed: yaw only enters
+            // the residuals through a rotation, so they're 2*pi-periodic in it.
+            // Yaw is normalized to [-pi, pi] right after the solve instead.
             problem.AddParameterBlock(opt_state.state.data(), 4);
-
-            //Tell the optimizer to perform updates in the manifold space
-            problem.SetManifold(opt_state.state.data(), state_manifold);
 
             // Define a robust kernel
             double loss_threshold = 2.5; // = residuals higher than 2.5 times sigma are outliers
@@ -1043,6 +1068,7 @@ private:
             ceres::Solver::Summary summary;
             ceres::Solve(options, &problem, &summary);
             RCLCPP_INFO(this->get_logger(), summary.BriefReport().c_str());
+            opt_state.state[3] = normalizeAngle(opt_state.state[3]);
 
             // Notify and update values if optimization converged
             if (summary.termination_type == ceres::CONVERGENCE){
@@ -1106,6 +1132,7 @@ private:
     double opt_timer_rate_;
     size_t min_measurements_;
     double min_traveled_distance_, min_traveled_angle_, max_traveled_distance_;
+    bool gate_either_ = false;  // motion_gate: "either" instead of "both"
     double measurement_stdev_;
     size_t moving_average_max_samples_;
     bool moving_average_;

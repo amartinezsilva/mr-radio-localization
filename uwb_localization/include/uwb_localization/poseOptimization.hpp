@@ -12,18 +12,15 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <sophus/se3.hpp>
-#include <ceres/ceres.h>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
 #include "uwb_localization/msg/pose_with_covariance_stamped_array.hpp"
-#include "uwb_localization/srv/update_point_clouds.hpp"
 
 #include "uwb_localization/utils.hpp"
 #include "uwb_localization/posegraph.hpp"
-#include "uwb_localization/CostFunctions.hpp"
-#include "uwb_localization/manifolds.hpp"
+#include "uwb_localization/posegraph_backend.hpp"
 
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -33,11 +30,11 @@ namespace uwb_localization {
 /**
  * @brief Pose-graph fusion of AGV & UAV odom, radar (ICP/GICP), and UWB encounters.
  *
- * Declarations only; see optimizerNodeFusion.cpp for definitions.
+ * Declarations only; see poseOptimization.cpp for definitions. The pose graph
+ * itself is solved by a PoseGraphBackend (Ceres or GTSAM, posegraph_backend.hpp).
  */
 class PoseOptimizationNode : public rclcpp::Node {
 public:
-  using UpdatePointClouds = uwb_localization::srv::UpdatePointClouds;
   using PoseWithCovArray = uwb_localization::msg::PoseWithCovarianceStampedArray;
 
   // Pose graph/optimizer aliases
@@ -63,8 +60,23 @@ public:
   /// Returns the UAV pose graph as a message array.
   PoseWithCovArray getUAVPoseGraph();
 
-  /// Logs aggregate Ceres metrics (runs, avg, stddev).
+  /// Logs aggregate solver metrics (runs, avg, stddev).
   void getMetrics() const;
+
+  /// Writes one CSV row per optimization step: solver stats of the backend
+  /// (and of the comparison backend, with the largest solution differences).
+  void writeBackendStats(const std::string& filename) const;
+
+  /// Writes the whole pose graph (final states, priors, every factor with its
+  /// measurement and covariance) as text, for offline analysis (e.g. noise
+  /// calibration). One record per line:
+  ///   node <a|u> <id> <planar> <roll> <pitch> <x> <y> <z> <yaw>
+  ///   anchor <a|u> <planar> <roll> <pitch> <x> <y> <z> <yaw>
+  ///   prior <agv|uav|anchor_agv|anchor_uav> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  ///   (one anchor prior: the one of the fixed anchor)
+  ///   factor <group> <id_begin> <id_end> <tx ty tz qx qy qz qw> <cov 4x4, row-major>
+  /// with group odom_agv, odom_uav, radar_agv, radar_uav, uwb or radar_encounter.
+  void writePoseGraphDump(const std::string& filename) const;
 
 private:
   //---------------- Parameter management ----------------//
@@ -99,13 +111,7 @@ private:
                                int id_source,
                                int id_target,
                                VectorOfConstraints& constraints_list,
-                               bool send_visualization = false,
                                const Eigen::Matrix4f* initial_guess = nullptr);
-
-  /// Send point clouds to external visualizer service (optional).
-  void sendPointCloudServiceRequest(const CloudConstPtr& source_cloud,
-                                    const CloudConstPtr& target_cloud,
-                                    const CloudConstPtr& aligned_cloud);
 
   /// Downsampling / (optional) outlier removal.
   CloudPtr preprocessPointCloud(const CloudConstPtr& input_cloud,
@@ -113,19 +119,14 @@ private:
                                 float stdevmulthresh = 2.0f,
                                 float leaf_size = 0.05f);
 
-  /// Propagate 6x6 odom covariances to reduced 4x4 (x,y,z,yaw) relative covariance.
-  Eigen::Matrix4d computeRelativeOdometryCovariance(const Sophus::SE3d& pose_target,
-                                                    const Sophus::SE3d& pose_source,
-                                                    const Eigen::Matrix<double,6,6>& cov_target,
-                                                    const Eigen::Matrix<double,6,6>& cov_source);
-
   /// Approximate ICP covariance (reduced 4x4) from correspondences.
   Eigen::Matrix4d computeICPCovariance(const CloudConstPtr& source,
                                        const CloudConstPtr& target,
                                        const Eigen::Matrix4f& transformation,
                                        double sensor_variance = 0.01);
 
-  /// Run ICP/GICP with configured settings.
+  /// Run ICP/GICP with configured settings. For GICP (icp_type 2) also returns
+  /// the final Hessian and the number of inlier correspondences.
   bool run_icp(const CloudConstPtr& source_cloud,
                const CloudConstPtr& target_cloud,
                CloudPtr& aligned_cloud,
@@ -133,7 +134,8 @@ private:
                const double& pointcloud_sigma,
                double& fitness,
                const int& icp_type,
-               Eigen::Matrix<double,6,6>& final_hessian) const;
+               Eigen::Matrix<double,6,6>& final_hessian,
+               size_t& num_inliers) const;
 
   /// Build point+normal cloud for point-to-plane ICP.
   pcl::PointCloud<pcl::PointNormal>::Ptr computePointNormalCloud(const CloudConstPtr& cloud,
@@ -145,42 +147,13 @@ private:
                                       const Sophus::SE3d& odom_T_t,
                                       double dt);
 
-  /// Add intra-robot constraints (odom/ICP) to Ceres problem.
-  bool addMeasurementConstraints(ceres::Problem& problem,
-                                 const VectorOfConstraints& constraints,
-                                 MapOfStates& map,
-                                 const int& current_id,
-                                 const int& max_keyframes,
-                                 ceres::LossFunction* loss);
+  /// Pose-graph inputs over the given states (the node's own, or copies of them).
+  PoseGraphInput makeGraphInput(MapOfStates& agv_map, MapOfStates& uav_map,
+                                State& anchor_agv, State& anchor_uav) const;
 
-  /// Add inter-robot (encounter) constraints to Ceres problem (single-pair).
-  bool addEncounterConstraints(ceres::Problem& problem,
-                               const VectorOfConstraints& constraints,
-                               MapOfStates& source_map,
-                               MapOfStates& target_map,
-                               const int& source_current_id,
-                               const int& target_current_id,
-                               const int& max_keyframes,
-                               ceres::LossFunction* loss);
-
-  /// Add inter-robot (encounter) constraints to all nodes in the window.
-  bool addEncounterTrajectoryConstraints(ceres::Problem& problem,
-                                         MapOfStates& source_map,
-                                         MapOfStates& target_map,
-                                         const int& source_current_id,
-                                         const int& target_current_id,
-                                         const int& max_keyframes,
-                                         ceres::LossFunction* loss);
-
-  /// Build & solve the pose graph with Ceres; updates states & covariances.
-  bool runPosegraphOptimization(MapOfStates& agv_map,
-                                MapOfStates& uav_map,
-                                const VectorOfConstraints& proprioceptive_constraints_agv,
-                                const VectorOfConstraints& extraceptive_constraints_agv,
-                                const VectorOfConstraints& proprioceptive_constraints_uav,
-                                const VectorOfConstraints& extraceptive_constraints_uav,
-                                const VectorOfConstraints& encounter_constraints_uwb,
-                                const VectorOfConstraints& encounter_constraints_pointcloud);
+  /// Solves the pose graph with the configured backend; updates states and
+  /// covariances. Returns true on convergence.
+  bool runPosegraphOptimization();
 
 private:
   //---------------- Subscriptions ----------------//
@@ -206,12 +179,10 @@ private:
 
 
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-  rclcpp::Client<UpdatePointClouds>::SharedPtr pcl_visualizer_client_;
   rclcpp::TimerBase::SharedPtr global_optimization_timer_;
 
   //---------------- Parameters ----------------//
   double opt_timer_rate_{10.0};
-  Sophus::SE3d T_uav_radar_, T_agv_radar_;
   Sophus::SE3d T_uav_imu_, T_agv_imu_;
   Sophus::SE3d T_agv_anchor_prior_, T_uav_anchor_prior_;
   double pointcloud_radar_sigma_{0.1};
@@ -225,6 +196,8 @@ private:
   double min_traveled_distance_{0.5}, min_traveled_angle_{0.524};
   int max_keyframes_{10}, min_keyframes_{3};
   int radar_history_size_{5};
+  int radar_min_inliers_{10};
+  double radar_yaw_stdev_{1.0 * M_PI / 180.0};  // rad, yaw std of radar factors
 
   //---------------- Measurements & State ----------------//
   CloudPtr uav_radar_cloud_{CloudPtr(new Cloud)};
@@ -264,7 +237,7 @@ private:
   Sophus::SE3d agv_init_pose_, uav_init_pose_;
   Sophus::SE3d uav_radar_odom_pose_, agv_radar_odom_pose_;
 
-  Eigen::Matrix<double,6,6> uav_odom_covariance_, agv_odom_covariance_;
+  posegraph::OdometryNoise odom_noise_agv_, odom_noise_uav_;
 
   // Timing
   double measurement_sync_thr_{0.25};
@@ -280,6 +253,20 @@ private:
   double uav_rotation_{0.0}, agv_rotation_{0.0};
 
   rclcpp::Time graph_start_time_;
+
+  // Pose-graph backends
+  std::string backend_name_{"ceres"}, compare_backend_name_;
+  bool fix_uav_anchor_{false};  // fixed_anchor == "uav"
+  std::unique_ptr<PoseGraphBackend> backend_, compare_backend_;
+
+  struct BackendStepRecord {
+    double time = 0.0;
+    int agv_id = 0, uav_id = 0;
+    PoseGraphSolveStats main, compare;
+    bool has_compare = false;
+    double max_dpos = 0.0, max_dyaw = 0.0, max_dcov = 0.0;
+  };
+  std::vector<BackendStepRecord> backend_records_;
 
   // Metrics
   int total_solves_{0};

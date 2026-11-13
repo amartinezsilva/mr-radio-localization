@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.8)
 project(uwb_localization)
 
+# Optimized by default: without a build type the optimization runs unoptimized
+# (Ceres' autodiff cost functions are compiled here). Override with -DCMAKE_BUILD_TYPE=...
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -17,7 +23,6 @@ find_package(Ceres REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(small_gicp REQUIRED)
 find_package(Boost REQUIRED date_time)
-find_package(Qt5OpenGL REQUIRED)
 find_package(PCL REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -27,10 +32,22 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
+# GTSAM (>= 4.3, built from source: the ROS binary package is 4.2) is
+# optional: without it only the Ceres pose-graph backend is built (asking for
+# a GTSAM backend then fails at startup with a clear message).
+option(UWB_LOCALIZATION_WITH_GTSAM "Build the GTSAM pose-graph backend if GTSAM is found" ON)
+if(UWB_LOCALIZATION_WITH_GTSAM)
+  find_package(GTSAM 4.3 QUIET)
+endif()
+if(GTSAM_FOUND)
+  message(STATUS "uwb_localization: GTSAM ${GTSAM_VERSION} found, building the GTSAM pose-graph backend")
+else()
+  message(STATUS "uwb_localization: GTSAM >= 4.3 not found/disabled, building the Ceres pose-graph backend only")
+endif()
+
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/UpdatePointClouds.srv"
   "msg/PoseWithCovarianceStampedArray.msg"
-  DEPENDENCIES std_msgs sensor_msgs geometry_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
 # Public include dir for headers (install + build)
@@ -45,7 +62,16 @@ include_directories(${pcl_conversions_INCLUDE_DIRS})
 include_directories(${pcl_ros_INCLUDE_DIRS})
 
 # --- add pose optimization library ---
-add_library(pose_optimization_lib SHARED src/poseOptimization.cpp)
+add_library(pose_optimization_lib SHARED
+  src/poseOptimization.cpp
+  src/posegraph_backend.cpp
+  src/ceres_backend.cpp
+)
+if(GTSAM_FOUND)
+  target_sources(pose_optimization_lib PRIVATE src/gtsam_backend.cpp)
+  target_link_libraries(pose_optimization_lib gtsam)
+  target_compile_definitions(pose_optimization_lib PUBLIC UWB_LOCALIZATION_WITH_GTSAM)
+endif()
 
 target_include_directories(pose_optimization_lib PUBLIC ${PUBLIC_INC})
 target_compile_features(pose_optimization_lib PUBLIC c_std_99 cxx_std_17)
@@ -122,13 +148,6 @@ ament_target_dependencies(global_opt_node_eliko
   rclcpp std_msgs geometry_msgs nav_msgs tf2_ros tf2_geometry_msgs eliko_messages
 )
 
-#PCL Visualizer executable
-add_executable(pcl_visualizer src/PCLVisualizer.cpp)
-target_include_directories(pcl_visualizer PUBLIC ${PUBLIC_INC})
-target_compile_features(pcl_visualizer PUBLIC c_std_99 cxx_std_17)
-ament_target_dependencies(pcl_visualizer rclcpp std_msgs sensor_msgs pcl_ros pcl_conversions)
-rosidl_target_interfaces(pcl_visualizer ${PROJECT_NAME} "rosidl_typesupport_cpp")
-
 #UAV and AGV odometry nodes
 add_executable(uav_odometry_node src/uav_odometry_node.cpp)
 target_include_directories(uav_odometry_node PUBLIC ${PUBLIC_INC})
@@ -146,7 +165,6 @@ ament_target_dependencies(agv_odometry_node rclcpp geometry_msgs sensor_msgs nav
 install(TARGETS
   pose_optimization_node
   global_opt_node_eliko
-  pcl_visualizer
   uav_odometry_node
   agv_odometry_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -156,7 +174,37 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
-install(DIRECTORY bags DESTINATION share/${PROJECT_NAME})
+# bags/ is installed as one symbolic link to the source folder, not bag by
+# bag: bags are large (a copy would duplicate them in install/) and are
+# dropped in at any time (with a link they're visible without rebuilding).
+# An older install put the bags there one by one; that folder is replaced
+# only if it holds nothing but links, so real bag files are never deleted
+# (e.g. a host folder bind-mounted there by an older Docker setup).
+install(CODE "
+  set(bags_link \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/bags\")
+  if(IS_DIRECTORY \"\${bags_link}\" AND NOT IS_SYMLINK \"\${bags_link}\")
+    file(GLOB_RECURSE bags_entries LIST_DIRECTORIES false \"\${bags_link}/*\")
+    set(bags_only_links TRUE)
+    foreach(entry \${bags_entries})
+      if(NOT IS_SYMLINK \"\${entry}\")
+        set(bags_only_links FALSE)
+      endif()
+    endforeach()
+    if(bags_only_links)
+      file(REMOVE_RECURSE \"\${bags_link}\")
+    else()
+      message(WARNING \"\${bags_link} holds real files, so it was left as it is instead of being linked to ${CMAKE_CURRENT_SOURCE_DIR}/bags. Move them out of there to get the link.\")
+    endif()
+  endif()
+  if(IS_SYMLINK \"\${bags_link}\")
+    file(REMOVE \"\${bags_link}\")  # removes the link itself, never its target
+  endif()
+  if(NOT EXISTS \"\${bags_link}\")
+    file(MAKE_DIRECTORY \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}\")
+    file(CREATE_LINK \"${CMAKE_CURRENT_SOURCE_DIR}/bags\" \"\${bags_link}\" SYMBOLIC)
+    message(STATUS \"Linked: \${bags_link} -> ${CMAKE_CURRENT_SOURCE_DIR}/bags\")
+  endif()
+")
 
 
 if(BUILD_TESTING)
