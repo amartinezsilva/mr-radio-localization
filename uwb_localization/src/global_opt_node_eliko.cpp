@@ -578,6 +578,8 @@ private:
 
             measurement.uav_cumulative_distance = uav_total_translation_;
             measurement.agv_cumulative_distance = agv_total_translation_;
+            measurement.uav_cumulative_rotation = uav_total_rotation_;
+            measurement.agv_cumulative_rotation = agv_total_rotation_;
 
             //Positions of tags and anchors according to odometry
             const auto tag_it = tag_positions_odom_.find(measurement.tag_id);
@@ -697,10 +699,22 @@ private:
 
         RCLCPP_WARN(this->get_logger(), "[Eliko global_opt node] Movement UAV = [%.2fm %.2fº], AGV= [%.2fm %.2fº].", uav_delta_translation_, uav_delta_rotation_ * 180.0/M_PI, agv_delta_translation_, agv_delta_rotation_ * 180.0/M_PI);
 
-        // Compute odometry covariance based on distance increments from step to step 
+        // Odometry drift within the measurement window. The estimate is the transform between
+        // the two odometry frames as they are now: drift accumulated before the window shifts
+        // the whole window and is absorbed by it (the transform changes over time, it isn't
+        // less certain), so only the drift that warps the odometry within the window adds
+        // uncertainty. (The pose graph models the accumulated drift with its odometry factors.)
+        const UWBMeasurement &window_start = global_measurements_.front();
+        const UWBMeasurement &window_end = global_measurements_.back();
+        const double window_translation =
+            (window_end.uav_cumulative_distance - window_start.uav_cumulative_distance) +
+            (window_end.agv_cumulative_distance - window_start.agv_cumulative_distance);
+        const double window_rotation =
+            (window_end.uav_cumulative_rotation - window_start.uav_cumulative_rotation) +
+            (window_end.agv_cumulative_rotation - window_start.agv_cumulative_rotation);
         Eigen::Matrix4d predicted_motion_covariance = Eigen::Matrix4d::Zero();
-        double predicted_drift_translation = (odom_error_distance_ / 100.0) * (uav_total_translation_ + agv_total_translation_);
-        double predicted_drift_rotation = (odom_error_angle_ / 100.0) * (uav_total_rotation_ + agv_total_rotation_);
+        double predicted_drift_translation = (odom_error_distance_ / 100.0) * window_translation;
+        double predicted_drift_rotation = (odom_error_angle_ / 100.0) * window_rotation;
         predicted_motion_covariance(0,0) = std::pow(predicted_drift_translation, 2.0);
         predicted_motion_covariance(1,1) = std::pow(predicted_drift_translation, 2.0);
         predicted_motion_covariance(2,2) = std::pow(predicted_drift_translation, 2.0);

@@ -36,6 +36,9 @@ namespace uwb_localization
         //Store the cumulative displacement (e.g., total distance traveled) for each robot at the measurement time.
         double uav_cumulative_distance;
         double agv_cumulative_distance;
+        // Cumulative rotation (rad) of each robot at the measurement time.
+        double uav_cumulative_rotation;
+        double agv_cumulative_rotation;
 
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     };

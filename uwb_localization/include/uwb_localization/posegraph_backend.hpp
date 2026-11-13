@@ -77,7 +77,7 @@ struct PoseGraphSolveStats {
 };
 
 struct PoseGraphBackendOptions {
-  double loss_threshold = 2.5;    // Cauchy loss scale, in sigmas
+  double loss_threshold = 2.5;    // Cauchy loss scale, in sigmas (UWB and radar factors; odometry has none)
   int max_iterations = 100;
   double function_tolerance = 1e-6;  // stop when the relative cost decrease is below this
   int num_threads = 12;           // Ceres only (GTSAM uses TBB if it was built with it)

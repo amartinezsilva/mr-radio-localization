@@ -124,8 +124,12 @@ void CeresBackend::buildProblem(ceres::Problem& problem, PoseGraphInput& in) {
   }
 
   // Intra-robot factors: odometry (proprioceptive) and radar (extraceptive).
-  addMeasurementConstraints(problem, in, false, in.odom_agv, robust_loss);
-  addMeasurementConstraints(problem, in, true, in.odom_uav, robust_loss);
+  // Odometry drifts but has no outliers, so it gets no robust loss: otherwise a
+  // UWB estimate that disagrees strongly (e.g. before the UWB estimator has
+  // converged) can down-weight it and bend the trajectory, a bend that stays
+  // once those nodes leave the sliding window. Radar and UWB keep the loss.
+  addMeasurementConstraints(problem, in, false, in.odom_agv, nullptr);
+  addMeasurementConstraints(problem, in, true, in.odom_uav, nullptr);
   addMeasurementConstraints(problem, in, false, in.radar_agv, robust_loss);
   addMeasurementConstraints(problem, in, true, in.radar_uav, robust_loss);
 

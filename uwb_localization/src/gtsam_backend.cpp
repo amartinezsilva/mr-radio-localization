@@ -44,10 +44,12 @@ public:
     if (in_.isFree(false, 0)) addPrior(nodeSlot(false, 0), *in_.prior_agv);
     if (in_.isFree(true, 0)) addPrior(nodeSlot(true, 0), *in_.prior_uav);
 
-    addIntra(false, in_.odom_agv);
-    addIntra(true, in_.odom_uav);
-    addIntra(false, in_.radar_agv);
-    addIntra(true, in_.radar_uav);
+    // Odometry without robust loss (it drifts but has no outliers); radar and UWB with it.
+    // Same as CeresBackend.
+    addIntra(false, in_.odom_agv, false);
+    addIntra(true, in_.odom_uav, false);
+    addIntra(false, in_.radar_agv, true);
+    addIntra(true, in_.radar_uav, true);
 
     addEncounters(in_.encounters_uwb);
     addEncounters(in_.encounters_radar);
@@ -140,13 +142,13 @@ private:
                                           std::vector<NodeSlot>{slot}, noise(prior.covariance, false));
   }
 
-  void addIntra(bool uav, const posegraph::VectorOfConstraints* constraints) {
+  void addIntra(bool uav, const posegraph::VectorOfConstraints* constraints, bool robust) {
     if (!constraints) return;
     for (const auto& c : *constraints) {
       if (!in_.isFree(uav, c.id_begin) && !in_.isFree(uav, c.id_end)) continue;
       graph_.emplace_shared<Pose4DoFFactor>(Pose4DoFFactor::Type::Between, c.t_T_s,
                                             std::vector<NodeSlot>{nodeSlot(uav, c.id_begin), nodeSlot(uav, c.id_end)},
-                                            noise(c.covariance, true));
+                                            noise(c.covariance, robust));
     }
   }
 
